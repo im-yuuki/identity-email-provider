@@ -110,27 +110,29 @@ Vaultwarden: service is commented out in compose.yaml (volume `vaultwarden-data`
 ## Scripts
 
 ```bash
-scripts/gen-env.sh [--force]      # generate a fresh .env with random secrets (argon2 token included)
-scripts/vw-hash-token.sh          # stdin -> vaultwarden ADMIN_TOKEN argon2id PHC (uses argon2 CLI or docker fallback)
+scripts/generate-env.sh [-o FILE] [--force]   # fresh .env with all stack secrets (OpenLDAP+Authelia era)
+scripts/vaultwarden-hash-token.sh             # stdin -> vaultwarden ADMIN_TOKEN argon2id PHC (docker fallback)
+scripts/generate-dev-cert.sh                  # self-signed wildcard -> tls/live/june8th.eu.org/{fullchain,privkey}.pem
 ```
 
-- `VAULTWARDEN_ADMIN_TOKEN` must be an argon2id PHC string (`$argon2id$...`); plaintext still works but logs `[NOTICE] plain-text ADMIN_TOKEN which is insecure`. The token stored in `.env` is written with `$$` because docker compose interpolates `.env` values (single `$` gets swallowed as a variable name and the hash is corrupted). The `/admin` password = the plaintext input of `vw-hash-token.sh` — print once, don't store.
-- `scripts/gen-env.sh` refuses to overwrite an existing `.env` unless `--force` (a backup is kept) and prints the Vaultwarden plaintext token exactly once.
+- `generate-env.sh` generates: LDAP_ADMIN_PASSWORD (+ both OpenLDAP argon2 bootstrap root hashes via `slappasswd`, `$$`-doubled), Authelia JWT/session/storage secrets, Stalwart admin + LDAP bind passwords, Bulwark/SSO secrets, and the Vaultwarden argon2id PHC token.
+- It ALSO re-syncs the three pbkdf2 client digests in `authelia/configuration.yml` (bulwark/stalwart/vaultwarden) to match the new `*_OAUTH_SECRET` values — restart authelia after regenerating. Sync only runs when writing the real `.env`.
+- Rotation does NOT auto-apply to: stalwart's stored `Directory.bindSecret` (registry copy of `STALWART_LDAP_BIND_PASSWORD`), and dev LDAP user passwords (`ldappasswd` needed).
+- `VAULTWARDEN_ADMIN_TOKEN` must be an argon2id PHC string (`$argon2id$...`); plaintext still works but logs `[NOTICE] plain-text ADMIN_TOKEN which is insecure`. The token stored in `.env` is written with `$$` because docker compose interpolates `.env` values (single `$` gets swallowed as a variable name and the hash is corrupted). The `/admin` password = the plaintext input — printed once, not stored.
+- `generate-env.sh` refuses to overwrite an existing `.env` unless `--force` (a backup is kept).
 
 ## Env inventory
 
 Active (set in compose.yaml / .env):
-- postgres: `POSTGRES_DB/USER/PASSWORD`, healthcheck via `pg_isready`.
-- authentik (server+worker): `AUTHENTIK_SECRET_KEY`, `POSTGRESQL__HOST/NAME/USER/PASSWORD/USE_PGPOOL`, `REDIS__HOST`, `ERROR_REPORTING__ENABLED=false`, `BOOTSTRAP__PASSWORD/USERNAME(akadmin)/EMAIL`.
-  - caveat: `BOOTSTRAP__EMAIL` is not honored on akadmin creation in 2026.8.4 — akadmin gets `root@example.com`; fix in admin UI or SQL after first boot.
-- stalwart: `STALWART_RECOVERY_ADMIN=admin:<pw>` (pinned first-boot admin; remove after a permanent admin exists), `STALWART_PUBLIC_URL=https://mx.june8th.eu.org`. Everything else lives in the 0.16 config/datastore (`/etc/stalwart` + `/var/lib/stalwart` volumes).
-- bulwark: `JMAP_SERVER_URL`, `ADMIN_PASSWORD`, `SESSION_SECRET` (wizard skipped); `OAUTH_*` block prewritten, commented.
+- openldap: `LDAP_ADMIN_PASSWORD`, `OPENLDAP_BOOTSTRAP_CONFIG_ROOT_PASSWORD_HASHED`/`..._DATA_ROOT_PASSWORD_HASHED` (argon2 PHC, `$$`-doubled), `OPENLDAP_BOOTSTRAP_MEMBEROF=true`, `OPENLDAP_URLS=ldap://:389/`; legacy `LDAP_*` vars are inert labels for this image.
+- authelia: `AUTHELIA_JWT_SECRET`, `AUTHELIA_SESSION_SECRET`, `AUTHELIA_STORAGE_KEY` (maps to `AUTHELIA_STORAGE_ENCRYPTION_KEY`), LDAP bind password = `LDAP_ADMIN_PASSWORD`.
+- stalwart: `STALWART_RECOVERY_ADMIN=admin:<pw>` (pinned first-boot admin; remove after a permanent admin exists), `STALWART_PUBLIC_URL=https://mx.june8th.eu.org`, `STALWART_LDAP_BIND_PASSWORD` (bind used at bootstrap; registry holds its own copy). Everything else lives in the 0.16 config/datastore (`/etc/stalwart` + `/var/lib/stalwart` volumes).
+- bulwark: `JMAP_SERVER_URL`, `ADMIN_PASSWORD`, `SESSION_SECRET`, SSO ACTIVE: `OAUTH_ENABLED/OAUTH_ONLY/OAUTH_CLIENT_ID=bulwark/OAUTH_CLIENT_SECRET=${BULWARK_OAUTH_SECRET}/OAUTH_ISSUER_URL=https://idp.june8th.eu.org/AUTO_SSO_ENABLED=true`, `extra_hosts idp→host-gateway`.
 - vaultwarden: not running (service commented out). `SSO_*` + `SMTP_*` blocks prewritten, commented; `ADMIN_TOKEN` in `.env` is an argon2id PHC (`$$`-doubled for compose).
-- nginx/redis: no env (nginx = config files; redis = flags only).
+- nginx: no env (config files only).
 
 nginx resilience: all vhosts use Docker's `resolver 127.0.0.11` + variable `proxy_pass`, so nginx starts even when a backend container is missing (e.g. vaultwarden disabled → `vault.` answers 502 instead of crash-looping).
 
 Recommended-but-not-set (decided against or later):
-- authentik `AUTHENTIK_WEB__WORKERS` / `AUTHENTIK_WORKER__CONCURRENCY`: tune only if VPS memory is tight.
 - vaultwarden `ORG_ATTACHMENT_LIMIT`, push-notification keys: not needed for personal use.
-- stalwart relay limits, DKIM keys: configured in its admin UI, not env.
+- stalwart relay limits, DKIM keys: configured in the 0.16 datastore (DkimSignature objects), not env.
