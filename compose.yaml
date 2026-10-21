@@ -6,6 +6,8 @@ volumes:
   authentik-templates:
   stalwart-data:
   stalwart-etc:
+  ldap-data:
+  ldap-config:
   vaultwarden-data:
   redis-data:
   nginx-cache:
@@ -30,98 +32,56 @@ services:
       timeout: 3s
       retries: 3
 
-  # ---------- Identity ----------
-  postgres:
-    image: postgres:18-alpine
-    container_name: postgres
+  # ---------- Identity---------- OpenLDAP + Authelia (authentik stack removed 2026-10-23, dev data disposable) ----------
+  openldap:
+    image: osixia/openldap:2.6.15-alpha   # 'stable' tag is a broken legacy image (osixia#605); maintainer points to 2.6.x-alpha
+    container_name: openldap
     restart: unless-stopped
     environment:
-      POSTGRES_DB: ${PG_DB}
-      POSTGRES_USER: ${PG_USER}
-      POSTGRES_PASSWORD: ${PG_PASSWORD}
+      LDAP_ORGANISATION: "june8th"
+      LDAP_DOMAIN: "june8th.eu.org"
+      LDAP_BASE_DN: "dc=june8th,dc=eu,dc=org"
+      LDAP_ADMIN_PASSWORD: ${LDAP_ADMIN_PASSWORD}
+      LDAP_CONFIG_PASSWORD: ${LDAP_ADMIN_PASSWORD}
+      LDAP_TLS: "false"   # plain LDAP :389, internal docker net only
+      # 2.6.x-alpha image variables (LDAP_* legacy vars are ignored by this image)
+      OPENLDAP_BOOTSTRAP_SUFFIX: "dc=june8th,dc=eu,dc=org"
+      OPENLDAP_BOOTSTRAP_ORGANIZATION: "june8th"
+      OPENLDAP_BOOTSTRAP_CONFIG_ROOT_PASSWORD_HASHED: ${OPENLDAP_CONFIG_ROOT_PW_HASHED}
+      OPENLDAP_BOOTSTRAP_DATA_ROOT_PASSWORD_HASHED: ${OPENLDAP_DATA_ROOT_PW_HASHED}
+      # memberof overlay on first boot (Authelia + Stalwart read group membership)
+      OPENLDAP_BOOTSTRAP_MEMBEROF: "true"
+      # image default listens on 3890/6360 — force standard ports for the stack
+      OPENLDAP_URLS: "ldap://:389/"
     volumes:
-      - postgres-data:/var/lib/postgresql
+      # bundled base/ renders the root DN from env; we only inject user data
+      - ./openldap/ldif/custom:/container/services/openldap-bootstrap/assets/ldif/data/custom
+      - ldap-data:/var/lib/openldap/openldap-data
+      - ldap-config:/etc/openldap/slapd.d
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${PG_USER} -d ${PG_DB}"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-
-  authentik:
-    image: ghcr.io/goauthentik/server:2026.8.4
-    container_name: authentik
-    restart: unless-stopped
-    command: server
-    environment:
-      AUTHENTIK_SECRET_KEY: ${AUTHENTIK_SECRET_KEY}
-      AUTHENTIK_POSTGRESQL__HOST: postgres
-      AUTHENTIK_POSTGRESQL__NAME: ${PG_DB}
-      AUTHENTIK_POSTGRESQL__USER: ${PG_USER}
-      AUTHENTIK_POSTGRESQL__PASSWORD: ${PG_PASSWORD}
-      AUTHENTIK_POSTGRESQL__USE_PGPOOL: "false"
-      AUTHENTIK_REDIS__HOST: redis
-      AUTHENTIK_ERROR_REPORTING__ENABLED: "false"
-      AUTHENTIK_BOOTSTRAP__PASSWORD: ${AUTHENTIK_BOOTSTRAP_PASSWORD}
-      AUTHENTIK_BOOTSTRAP__USERNAME: akadmin
-      AUTHENTIK_BOOTSTRAP__EMAIL: admin@june8th.eu.org
-    volumes:
-      - authentik-media:/media
-      - authentik-templates:/templates
-    depends_on:
-      postgres:
-        condition: service_healthy
-      redis:
-        condition: service_healthy
-    healthcheck:
-      test: ["CMD-SHELL", "python -c 'import socket; socket.create_connection((\"127.0.0.1\", 9000), 3).close()'"]
-      interval: 30s
-      timeout: 10s
-      start_period: 60s
-      retries: 3
-
-  authentik-worker:
-    image: ghcr.io/goauthentik/server:2026.8.4
-    container_name: authentik-worker
-    restart: unless-stopped
-    command: worker
-    environment:
-      AUTHENTIK_SECRET_KEY: ${AUTHENTIK_SECRET_KEY}
-      AUTHENTIK_POSTGRESQL__HOST: postgres
-      AUTHENTIK_POSTGRESQL__NAME: ${PG_DB}
-      AUTHENTIK_POSTGRESQL__USER: ${PG_USER}
-      AUTHENTIK_POSTGRESQL__PASSWORD: ${PG_PASSWORD}
-      AUTHENTIK_POSTGRESQL__USE_PGPOOL: "false"
-      AUTHENTIK_REDIS__HOST: redis
-      AUTHENTIK_ERROR_REPORTING__ENABLED: "false"
-      AUTHENTIK_BOOTSTRAP__PASSWORD: ${AUTHENTIK_BOOTSTRAP_PASSWORD}
-      AUTHENTIK_BOOTSTRAP__USERNAME: akadmin
-      AUTHENTIK_BOOTSTRAP__EMAIL: admin@june8th.eu.org
-    volumes:
-      - authentik-media:/media
-      - authentik-templates:/templates
-    depends_on:
-      postgres:
-        condition: service_healthy
-      redis:
-        condition: service_healthy
-      # wait for the server (migrations complete) instead of racing it for the
-      # database migration lock -> no "waiting to acquire database lock" /
-      # "workerstatus does not exist" startup noise; first boot ~30s slower
-      authentik:
-        condition: service_healthy
-
-  redis:
-    image: redis:8-alpine
-    container_name: redis
-    restart: unless-stopped
-    command: --save 60 1 --loglevel warning
-    volumes:
-      - redis-data:/data
-    healthcheck:
-      test: ["CMD-SHELL", "redis-cli ping | grep PONG"]
+      test: ["CMD-SHELL", "nc -z 127.0.0.1 389 || exit 1"]
       interval: 10s
       timeout: 3s
       retries: 5
+
+  authelia:
+    image: authelia/authelia:4.39.20
+    container_name: authelia
+    restart: unless-stopped
+    # default cwd is /app; point it at the mounted config explicitly
+    command: ['--config', '/config/configuration.yml']
+    environment:
+      X_AUTHELIA_CONFIG_FILTERS: template
+      AUTHELIA_JWT_SECRET: ${AUTHELIA_JWT_SECRET}
+      AUTHELIA_SESSION_SECRET: ${AUTHELIA_SESSION_SECRET}
+      AUTHELIA_STORAGE_ENCRYPTION_KEY: ${AUTHELIA_STORAGE_KEY}
+      AUTHELIA_IDENTITY_VALIDATION_RESET_PASSWORD_JWT_SECRET: ${AUTHELIA_JWT_SECRET}
+      AUTHELIA_AUTHENTICATION_BACKEND_LDAP_PASSWORD: ${LDAP_ADMIN_PASSWORD}
+      AUTHELIA_IDENTITY_PROVIDERS_OIDC_HMAC_SECRET: ${AUTHELIA_JWT_SECRET}
+    volumes:
+      - ./authelia:/config
+    depends_on:
+      - openldap
 
   # ---------- Mail ----------
   stalwart:
@@ -157,11 +117,18 @@ services:
       JMAP_SERVER_URL: http://stalwart:8080
       ADMIN_PASSWORD: ${BULWARK_ADMIN_PASSWORD}
       SESSION_SECRET: ${BULWARK_SESSION_SECRET}
-      # OAUTH_ENABLED: "true"
-      # OAUTH_ONLY: "true"
-      # OAUTH_CLIENT_ID: "bulwark"
-      # OAUTH_CLIENT_SECRET: "<generated>"
-      # OAUTH_ISSUER_URL: "https://idp.june8th.eu.org/application/o/bulwark/"
+      # SSO via Authelia (client "bulwark" in authelia/configuration.yml, redirect /auth/callback)
+      OAUTH_ENABLED: "true"
+      OAUTH_ONLY: "true"
+      OAUTH_CLIENT_ID: "bulwark"
+      OAUTH_CLIENT_SECRET: ${BULWARK_OAUTH_SECRET}
+      OAUTH_ISSUER_URL: "https://idp.june8th.eu.org"
+      # login page automatically starts the server-side SSO flow (doc: guides/embedded-sso)
+      AUTO_SSO_ENABLED: "true"
+    extra_hosts:
+      # the FQDN of the Authelia issuer must resolve from inside the container
+      # (host /etc/hosts dev mapping otherwise wins): send it to nginx via the host gateway
+      - "idp.june8th.eu.org:host-gateway"
     volumes:
       - bulwark-config:/app/data/admin
       - bulwark-state:/app/data/admin-state

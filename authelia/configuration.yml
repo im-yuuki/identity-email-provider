@@ -1,0 +1,146 @@
+# Authelia — non-secret settings. All secrets come from compose environment (AUTHELIA_*).
+# Rendered with the template file filter (X_AUTHELIA_CONFIG_FILTERS=template) so the
+# JWKS RSA key can be loaded from a file instead of being pasted here.
+server:
+  address: 'tcp://0.0.0.0:9091'
+
+log:
+  level: info
+
+# MFA off for now; the VM is small and this is a personal mail/mailbox edge.
+# Re-enable later by adding totp + webauthn sessions and bumping policy.
+totp:
+  disable: true
+
+webauthn:
+  disable: true
+
+session:
+  cookies:
+    - domain: 'june8th.eu.org'
+      authelia_url: 'https://idp.june8th.eu.org'
+      # where to land after login when no target is given (different from authelia_url is required)
+      default_redirection_url: 'https://mail.june8th.eu.org/'
+      name: 'authelia_session'
+      inactivity: '30m'
+      expiration: '12h'
+      remember_me: '1M'
+
+storage:
+  local:
+    path: '/config/db.sqlite3'
+
+notifier:
+  disable_startup_check: true
+  filesystem:
+    filename: '/config/notification.txt'
+
+# reset-password flow disabled entirely (needs SMTP; users are seeded manually)
+authentication_backend:
+  password_reset:
+    disable: true
+  refresh_interval: '1m'
+  ldap:
+    implementation: 'custom'
+    address: 'ldap://openldap:389'
+    timeout: '5s'
+    start_tls: false
+    base_dn: 'dc=june8th,dc=eu,dc=org'
+    additional_users_dn: 'ou=people'
+    users_filter: '(&({username_attribute}={input}))'
+    additional_groups_dn: 'ou=groups'
+    groups_filter: '(&({groupname_attribute}={input})(member={dn}))'
+    attributes:
+      username: 'uid'
+      mail: 'mail'
+      display_name: 'cn'
+      group_name: 'cn'
+    user: 'cn=admin,dc=june8th,dc=eu,dc=org'
+    # password via compose env AUTHELIA_AUTHENTICATION_BACKEND_LDAP_PASSWORD
+
+access_control:
+  default_policy: 'one_factor'
+
+identity_providers:
+  oidc:
+    # hmac secret via compose env AUTHELIA_IDENTITY_PROVIDERS_OIDC_HMAC_SECRET
+    jwks:
+      - key_id: 'primary'
+        algorithm: 'RS256'
+        use: 'sig'
+        key: {{ secret "/config/keys/primary.key" | mindent 10 "|" | msquote }}
+    clients:
+      # Bulwark webmail (server-side PKCE, callback dropped at /auth/callback)
+      - client_id: 'bulwark'
+        client_name: 'Bulwark webmail'
+        client_secret: '$pbkdf2-sha512$310000$SoVIToGmKFSwy0nnA6.L4w$VJ.s6Kfzx1Cjd7/1dH0iUjvR8Ww8t5Nf/N1EcaxGLxPUsONfvSHYI.0RB9d8h0N6cDZh6TyrHom9WkLC2E/Jlg'  # digest of $BULWARK_OAUTH_SECRET
+        public: false
+        authorization_policy: 'one_factor'
+        consent_mode: 'implicit'   # trusted first-party client — skip the consent screen
+        require_pkce: false
+        pkce_challenge_method: 'S256'
+        redirect_uris:
+          - 'https://mail.june8th.eu.org/auth/callback'
+          - 'https://mail.june8th.eu.org/en/auth/callback'
+        scopes:
+          - 'openid'
+          - 'email'
+          - 'profile'
+          - 'offline_access'
+        response_types:
+          - 'code'
+        grant_types:
+          - 'authorization_code'
+        access_token_signed_response_alg: 'none'
+        userinfo_signed_response_alg: 'none'
+        token_endpoint_auth_method: 'client_secret_post'
+
+      # Vaultwarden (SSO block stays commented in compose until vault is re-enabled)
+      - client_id: 'vaultwarden'
+        client_name: 'Vaultwarden'
+        client_secret: '$pbkdf2-sha512$310000$FJoBc7enXq71/lTq5A/Aog$K39xxpcicn1nBEbToQUtSzGGgGbIqRHpMJmsd3WBLp7VfaVkiTiZUV8M5d7SvVuVjl8JDPIkVSsfRayTErUsRw'  # digest of $VAULTWARDEN_SSO_SECRET
+        public: false
+        authorization_policy: 'one_factor'
+        consent_mode: 'implicit'   # trusted first-party client
+        require_pkce: false
+        pkce_challenge_method: 'S256'
+        redirect_uris:
+          - 'https://vault.june8th.eu.org/identity/connect/callback'
+          - 'https://vault.june8th.eu.org/identity/connect/oidc-signin'
+        scopes:
+          - 'openid'
+          - 'email'
+          - 'profile'
+          - 'offline_access'
+        response_types:
+          - 'code'
+        grant_types:
+          - 'authorization_code'
+        access_token_signed_response_alg: 'none'
+        userinfo_signed_response_alg: 'none'
+        token_endpoint_auth_method: 'client_secret_post'
+
+      # Stalwart WebUI (broad callback until the exact path is confirmed)
+      - client_id: 'stalwart'
+        client_name: 'Stalwart Mail'
+        client_secret: '$pbkdf2-sha512$310000$O6jBY8lE.czqjtibaijDzg$WeK1XuOfjidSNGiZ/I7PJrBRRgO5F6rHPSrLJfmY1hdSjUMqbxEHGhVdA2OFP8DFBhHV5aLGmq6CI5xZjh/m5g'  # digest of $STALWART_OAUTH_SECRET
+        public: false
+        authorization_policy: 'one_factor'
+        consent_mode: 'implicit'   # trusted first-party client
+        require_pkce: false
+        pkce_challenge_method: 'S256'
+        redirect_uris:
+          - 'https://mx.june8th.eu.org/*'
+          - 'https://mx.june8th.eu.org'
+        scopes:
+          - 'openid'
+          - 'email'
+          - 'profile'
+          - 'offline_access'
+        response_types:
+          - 'code'
+        grant_types:
+          - 'authorization_code'
+        access_token_signed_response_alg: 'none'
+        userinfo_signed_response_alg: 'none'
+        token_endpoint_auth_method: 'client_secret_post'

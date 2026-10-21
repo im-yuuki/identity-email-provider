@@ -1,0 +1,20 @@
+# Bind accounts for services. Passwords set interactively after first boot
+# (ldappasswd) — never keep plaintext secrets in ldif.
+
+dn: uid=svc-mail,ou=services,dc=june8th,dc=eu,dc=org
+objectClass: top
+objectClass: person
+objectClass: organizationalPerson
+objectClass: inetOrgPerson
+cn: svc-mail
+sn: svc-mail
+uid: svc-mail
+
+dn: uid=svc-stalwart-auth,ou=services,dc=june8th,dc=eu,dc=org
+objectClass: top
+objectClass: person
+objectClass: organizationalPerson
+objectClass: inetOrgPerson
+cn: svc-stalwart-auth
+sn: svc
+uid: svc-stalwart-auth

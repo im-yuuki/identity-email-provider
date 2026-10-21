@@ -1,3 +1,8 @@
 .env
 tls/*
 .private/
+
+# authelia runtime state + keys
+authelia/db.sqlite3
+authelia/db.sqlite3.*
+authelia/keys/
