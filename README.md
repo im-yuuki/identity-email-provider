@@ -22,7 +22,7 @@ Persistent named volumes: LDAP, Authelia, Stalwart, Bulwark, Vaultwarden
 
 ## Quickstart (fresh VPS)
 
-1. Point DNS records below at the VPS. Install a TLS certificate covering `june8th.eu.org` and `*.june8th.eu.org`; nginx and Stalwart use `/etc/letsencrypt` by default.
+1. Point DNS records below at the VPS. Install a TLS certificate covering `june8th.eu.org` and `*.june8th.eu.org`; nginx and Stalwart mount `/etc/letsencrypt` read-only.
 2. Clone the repo, then run each bootstrap script **once**:
 
    ```bash
@@ -37,7 +37,7 @@ Persistent named volumes: LDAP, Authelia, Stalwart, Bulwark, Vaultwarden
    bash scripts/02-bootstrap-stalwart.sh
    ```
 
-   The script assumes Stalwart RocksDB at `/var/lib/stalwart`; it starts only the services needed for setup, sets the LDAP `svc-mail` password only if the account has no password yet, starts Stalwart briefly in recovery mode, dry-runs and applies `stalwart/bootstrap.ndjson`, then runs `docker compose down --remove-orphans`. **When the script exits, all project containers are stopped and removed; named volumes are preserved** (it never uses `down -v`). It configures the LDAP directory, domain, DKIM mode, and mounted TLS certificate without the WebUI wizard.
+   The script assumes Stalwart RocksDB at `/var/lib/stalwart`; it starts only the services needed for setup, sets the LDAP `svc-mail` password only if the account has no password yet, starts Stalwart briefly in recovery mode, dry-runs and applies `stalwart/bootstrap.ndjson`, then runs `docker compose down --remove-orphans`. **When the script exits, all project containers are stopped and removed; named volumes are preserved** (it never uses `down -v`). Stalwart runs as root in its container and reads the host's Let's Encrypt files directly through a read-only mount; no host hook or copied certificate volume is used. It configures the LDAP directory, domain, DKIM mode, and TLS certificate without the WebUI wizard. Certbot renews the mounted files, but Stalwart does not reload rotated certificate files automatically: while the stack is running, trigger Stalwart's `ReloadTlsCertificates` action from its CLI or WebUI. Nginx also needs a reload to pick up a renewed certificate (`docker compose exec nginx nginx -s reload`).
 
    Start the full stack only when you want it running:
 

@@ -28,8 +28,8 @@ cleanup() {
 }
 trap cleanup EXIT
 
-echo "Starting LDAP and verifying existing credentials..."
 cleanup_needed=1
+echo "Starting LDAP and verifying existing credentials..."
 docker compose up -d openldap
 ready=0
 for _ in $(seq 1 60); do

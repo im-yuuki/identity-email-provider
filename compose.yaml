@@ -95,6 +95,7 @@ services:
   stalwart:
     image: ghcr.io/stalwartlabs/stalwart:v0.16.27-alpine
     container_name: stalwart
+    user: "0:0"
     restart: unless-stopped
     ports:
       - "25:25"
