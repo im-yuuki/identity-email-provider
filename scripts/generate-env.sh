@@ -103,7 +103,7 @@ VAULTWARDEN_SSO_SECRET=$VAULTWARDEN_SSO_SECRET
 VAULTWARDEN_ADMIN_TOKEN=$VW_PHC_ENV
 
 # Real deployment only (VPS). Dev default = ./tls (mimics the letsencrypt layout)
-#LETSENCRYPT_DIR=/etc/letsencrypt
+LETSENCRYPT_DIR=/etc/letsencrypt
 EOF
 
 ########## sync oauth digests into authelia/configuration.yml ##########
