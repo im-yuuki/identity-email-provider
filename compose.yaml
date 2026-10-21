@@ -104,6 +104,11 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
+      # wait for the server (migrations complete) instead of racing it for the
+      # database migration lock -> no "waiting to acquire database lock" /
+      # "workerstatus does not exist" startup noise; first boot ~30s slower
+      authentik:
+        condition: service_healthy
 
   redis:
     image: redis:8-alpine
