@@ -29,7 +29,7 @@ fi
 rand() { openssl rand -hex "$1"; }
 
 RAW_VW_TOKEN=$(rand 24)
-VW_PHC=$(printf '%s' "$RAW_VW_TOKEN" | scripts/vw-hash-token.sh)
+VW_PHC=$(printf '%s' "$RAW_VW_TOKEN" | scripts/vaultwarden-hash-token.sh)
 # docker compose interpolates .env values: \$ must be written as \$$ \
 # (see vaultwarden wiki: "escape all occurrences of the dollar sign")
 VW_PHC_ENV=${VW_PHC//$/\$\$}
@@ -51,9 +51,7 @@ STALWART_ADMIN_PASSWORD=$(rand 16)
 BULWARK_ADMIN_PASSWORD=$(rand 16)
 BULWARK_SESSION_SECRET=$(rand 32)
 VAULTWARDEN_ADMIN_TOKEN=${VW_PHC_ENV}
-
-# real deployment only (VPS): point at the host letsencrypt tree
-#LE_DIR=/etc/letsencrypt
+#LETSENCRYPT_DIR=/etc/letsencrypt
 EOF
 
 echo "wrote $OUT ($(stat -f '%Lp' "$OUT"))"
