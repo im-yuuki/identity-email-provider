@@ -1,0 +1,207 @@
+# IdP + Mail + Webmail + Vault — single-VPS stack
+# Domains: idp. / mail. / mx. / vault.june8th.eu.org  (TLS attached manually)
+
+x-logging: &default-logging
+  driver: json-file
+  options: { max-size: "10m", max-file: "3" }
+
+networks:
+  idp:
+    name: idp
+
+volumes:
+  bulwark-config:
+  bulwark-state:
+  postgres-data:
+  authentik-media:
+  authentik-templates:
+  stalwart-data:
+  vaultwarden-data:
+  redis-data:
+  nginx-cache:
+
+services:
+  # ---------- Edge ----------
+  nginx:
+    image: nginx:${NGINX_TAG:-stable-alpine}
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./nginx/conf.d:/etc/nginx/conf.d:ro
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./tls:/etc/nginx/tls:ro
+      - nginx-cache:/var/cache/nginx
+    networks: [idp]
+    logging: *default-logging
+    healthcheck:
+      test: ["CMD", "nginx", "-t"]
+      interval: 30s
+      timeout: 3s
+      retries: 3
+
+  # ---------- Identity ----------
+  postgres:
+    image: postgres:${POSTGRES_TAG:-17-alpine}
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${PG_DB}
+      POSTGRES_USER: ${PG_USER}
+      POSTGRES_PASSWORD: ${PG_PASSWORD}
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    networks: [idp]
+    logging: *default-logging
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${PG_USER} -d ${PG_DB}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  authentik:
+    image: ghcr.io/goauthentik/server:${AUTHENTIK_TAG:-latest}
+    restart: unless-stopped
+    command: server
+    environment:
+      AUTHENTIK_SECRET_KEY: ${AUTHENTIK_SECRET_KEY}
+      AUTHENTIK_POSTGRESQL__HOST: postgres
+      AUTHENTIK_POSTGRESQL__NAME: ${PG_DB}
+      AUTHENTIK_POSTGRESQL__USER: ${PG_USER}
+      AUTHENTIK_POSTGRESQL__PASSWORD: ${PG_PASSWORD}
+      AUTHENTIK_POSTGRESQL__USE_PGPOOL: "false"
+      AUTHENTIK_REDIS__HOST: redis
+      AUTHENTIK_ERROR_REPORTING__ENABLED: "false"
+      # auto-create akadmin on first start: skips /if/flow/initial-setup/ browser step
+      AUTHENTIK_BOOTSTRAP__PASSWORD: ${AUTHENTIK_BOOTSTRAP_PASSWORD}
+      AUTHENTIK_BOOTSTRAP__USERNAME: akadmin
+      AUTHENTIK_BOOTSTRAP__EMAIL: admin@june8th.eu.org
+    volumes:
+      - authentik-media:/media
+      - authentik-templates:/templates
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks: [idp]
+    logging: *default-logging
+    healthcheck:
+      test: ["CMD-SHELL", "python -c 'import socket; socket.create_connection((\"127.0.0.1\", 9000), 3).close()'"]
+      interval: 30s
+      timeout: 10s
+      start_period: 60s
+      retries: 3
+
+  authentik-worker:
+    image: ghcr.io/goauthentik/server:${AUTHENTIK_TAG:-latest}
+    restart: unless-stopped
+    command: worker
+    environment:
+      AUTHENTIK_SECRET_KEY: ${AUTHENTIK_SECRET_KEY}
+      AUTHENTIK_POSTGRESQL__HOST: postgres
+      AUTHENTIK_POSTGRESQL__NAME: ${PG_DB}
+      AUTHENTIK_POSTGRESQL__USER: ${PG_USER}
+      AUTHENTIK_POSTGRESQL__PASSWORD: ${PG_PASSWORD}
+      AUTHENTIK_POSTGRESQL__USE_PGPOOL: "false"
+      AUTHENTIK_REDIS__HOST: redis
+      AUTHENTIK_ERROR_REPORTING__ENABLED: "false"
+      # auto-create akadmin on first start: skips /if/flow/initial-setup/ browser step
+      AUTHENTIK_BOOTSTRAP__PASSWORD: ${AUTHENTIK_BOOTSTRAP_PASSWORD}
+      AUTHENTIK_BOOTSTRAP__USERNAME: akadmin
+      AUTHENTIK_BOOTSTRAP__EMAIL: admin@june8th.eu.org
+    volumes:
+      - authentik-media:/media
+      - authentik-templates:/templates
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks: [idp]
+    logging: *default-logging
+
+  redis:
+    image: redis:${REDIS_TAG:-7-alpine}
+    restart: unless-stopped
+    command: --save 60 1 --loglevel warning
+    volumes:
+      - redis-data:/data
+    networks: [idp]
+    logging: *default-logging
+    healthcheck:
+      test: ["CMD-SHELL", "redis-cli ping | grep PONG"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+
+  # ---------- Mail ----------
+  stalwart:
+    image: ghcr.io/stalwartlabs/stalwart:${STALWART_TAG:-v0.12.0-alpine}
+    restart: unless-stopped
+    ports:
+      - "25:25"
+      - "465:465"
+      - "587:587"
+      - "993:993"
+      - "995:995"
+    volumes:
+      - ./tls:/etc/stalwart/tls:ro
+      - stalwart-data:/opt/stalwart
+    networks: [idp]
+    logging: *default-logging
+    healthcheck:
+      test: ["CMD-SHELL", "nc -z 127.0.0.1 8080 || exit 1"]
+      interval: 30s
+      timeout: 10s
+      start_period: 30s
+      retries: 5
+
+  # ---------- Webmail ----------
+  bulwark:
+    image: ghcr.io/bulwarkmail/webmail:${BULWARK_TAG:-latest}
+    restart: unless-stopped
+    environment:
+      # env-driven config = setup wizard disabled
+      JMAP_SERVER_URL: http://stalwart:8080
+      ADMIN_PASSWORD: ${BULWARK_ADMIN_PASSWORD}
+      SESSION_SECRET: ${BULWARK_SESSION_SECRET}
+      # --- bỏ comment sau khi tạo OIDC provider "bulwark" trong Authentik ---
+      # OAUTH_ENABLED: "true"
+      # OAUTH_ONLY: "true"
+      # OAUTH_CLIENT_ID: "bulwark"
+      # OAUTH_CLIENT_SECRET: "<generated>"
+      # OAUTH_ISSUER_URL: "https://idp.june8th.eu.org/application/o/bulwark/"
+    volumes:
+      - bulwark-config:/app/data/admin        # config đã ghi đè từ env
+      - bulwark-state:/app/data/admin-state   # phải luôn rw
+    networks: [idp]
+    logging: *default-logging
+
+  # ---------- Secrets / Vault ----------
+  vaultwarden:
+    image: vaultwarden/server:${VAULTWARDEN_TAG:-latest}
+    restart: unless-stopped
+    environment:
+      DOMAIN: https://vault.june8th.eu.org
+      ADMIN_TOKEN: ${VAULTWARDEN_ADMIN_TOKEN}
+      SIGNUPS_ALLOWED: "true"   # turn OFF after Authentik OIDC is working
+      SIGNUPS_DOMAINS_WHITELIST: "june8th.eu.org"
+      SHOW_PASSWORD_HINT: "false"
+      # --- enable after creating OIDC provider "vaultwarden" in Authentik (confirm SSO works, then disable SIGNUPS_ALLOWED) ---
+      # SSO_ENABLED: "true"
+      # SSO_ONLY: "true"
+      # SSO_AUTHORITY: "https://idp.june8th.eu.org/application/o/vaultwarden/"
+      # SSO_CLIENT_ID: "vaultwarden"
+      # SSO_CLIENT_SECRET: "<generated>"
+      # --- outbound mail (admin invites, emergency notes) via local Stalwart ---
+      # SMTP_HOST: "stalwart"
+      # SMTP_PORT: "465"
+      # SMTP_SECURITY: "force_tls"
+      # SMTP_USERNAME: "no-reply@june8th.eu.org"
+      # SMTP_PASSWORD: "<svc-mail password>"
+      # MAIL_FROM: "no-reply@june8th.eu.org"
+    volumes:
+      - vaultwarden-data:/data
+    networks: [idp]
+    logging: *default-logging
