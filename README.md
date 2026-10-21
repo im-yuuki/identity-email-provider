@@ -31,16 +31,20 @@ Persistent named volumes: LDAP, Authelia, Stalwart, Bulwark, Vaultwarden
    ```
 
    Keep `.env`, `authelia/keys/` and `authelia/secrets/` private. `.env` is gitignored: `git clean -Xdf` can delete it without deleting Docker volumes. Restore the matching `.env` backup if it goes missing; a newly generated LDAP password cannot unlock an existing LDAP volume. The generator refuses to create/rotate `.env` while this Compose project's persistent volumes exist. Do not remove volumes unless their data is disposable.
-3. Bootstrap Stalwart declaratively, then start the rest of the stack:
+3. Bootstrap Stalwart declaratively:
 
    ```bash
-   docker compose up -d openldap
    bash scripts/02-bootstrap-stalwart.sh
+   ```
+
+   The script assumes Stalwart RocksDB at `/var/lib/stalwart`; it starts only the services needed for setup, sets the LDAP `svc-mail` password only if the account has no password yet, starts Stalwart briefly in recovery mode, dry-runs and applies `stalwart/bootstrap.ndjson`, then runs `docker compose down --remove-orphans`. **When the script exits, all project containers are stopped and removed; named volumes are preserved** (it never uses `down -v`). It configures the LDAP directory, domain, DKIM mode, and mounted TLS certificate without the WebUI wizard.
+
+   Start the full stack only when you want it running:
+
+   ```bash
    docker compose up -d
    docker compose ps
    ```
-
-   The script assumes Stalwart RocksDB at `/var/lib/stalwart`; it sets the LDAP `svc-mail` password from `.env` only if the account has no password yet, starts Stalwart briefly in recovery mode, dry-runs and applies `stalwart/bootstrap.ndjson`, then returns Stalwart to normal mode. It configures the LDAP directory, domain, DKIM mode, and mounted TLS certificate without the WebUI wizard. It prompts for `STALWART_ADMIN_PASSWORD`.
 
 4. Vaultwarden is enabled with Authelia OIDC-only sign-in. SSO-only sign-in is restricted by Authelia and the `june8th.eu.org` email-domain whitelist. Visit `https://vault.june8th.eu.org`; Authelia is at `https://idp.june8th.eu.org`.
 

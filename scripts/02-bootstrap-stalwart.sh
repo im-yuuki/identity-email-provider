@@ -13,16 +13,23 @@ for file in stalwart/config.json stalwart/bootstrap.ndjson compose.stalwart-reco
 done
 docker compose config --quiet
 
-recovery_started=0
-restore_normal_mode() {
-    if [ "$recovery_started" -eq 1 ]; then
-        echo "Returning Stalwart to normal mode..."
-        docker compose up -d stalwart
+cleanup_needed=0
+cleanup() {
+    status=$?
+    trap - EXIT
+    if [ "$cleanup_needed" -eq 1 ]; then
+        echo "Stopping and removing all Compose containers (named volumes are kept)..."
+        if ! docker compose down --remove-orphans; then
+            echo "warning: Compose cleanup failed; check for remaining containers" >&2
+            [ "$status" -ne 0 ] || status=1
+        fi
     fi
+    exit "$status"
 }
-trap restore_normal_mode EXIT
+trap cleanup EXIT
 
 echo "Starting LDAP and verifying existing credentials..."
+cleanup_needed=1
 docker compose up -d openldap
 ready=0
 for _ in $(seq 1 60); do
@@ -66,7 +73,6 @@ EOF
   fi'
 
 echo "Starting Stalwart in recovery mode..."
-recovery_started=1
 docker compose -f compose.yaml -f compose.stalwart-recovery.yaml up -d stalwart
 ready=0
 for _ in $(seq 1 60); do
@@ -106,7 +112,4 @@ cli=(docker run --rm --network container:stalwart
 "${cli[@]}" apply --file /work/bootstrap.ndjson --dry-run
 "${cli[@]}" apply --file /work/bootstrap.ndjson
 
-restore_normal_mode
-recovery_started=0
-trap - EXIT
-echo "Stalwart configuration applied; it is back in normal mode."
+echo "Stalwart configuration applied."
