@@ -79,8 +79,20 @@ if [ "$ready" -ne 1 ]; then
     exit 1
 fi
 
-read -r -s -p "Stalwart recovery admin password (STALWART_ADMIN_PASSWORD): " STALWART_PASSWORD
-echo
+recovery_admin=$(docker compose exec -T stalwart sh -c 'printf "%s" "$STALWART_RECOVERY_ADMIN"')
+case "$recovery_admin" in
+    admin:*) STALWART_PASSWORD=${recovery_admin#admin:} ;;
+    *)
+        unset recovery_admin
+        echo "error: STALWART_RECOVERY_ADMIN is missing or does not use the admin account" >&2
+        exit 1
+        ;;
+esac
+unset recovery_admin
+if [ -z "$STALWART_PASSWORD" ]; then
+    echo "error: recovery admin password is empty; check STALWART_ADMIN_PASSWORD in .env" >&2
+    exit 1
+fi
 export STALWART_PASSWORD
 
 cli=(docker run --rm --network container:stalwart
