@@ -1,9 +1,12 @@
 .env
 .private/
 
-# authelia runtime state + keys
+# legacy Authelia runtime state and generated secrets (keep local-only)
 authelia/db.sqlite3
 authelia/db.sqlite3.*
 authelia/keys/
 authelia/secrets/
 authelia/configuration.yml.bak.digest
+
+# local Authentik environment and generated secrets
+.env.*.local

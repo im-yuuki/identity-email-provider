@@ -1,32 +1,28 @@
 #!/usr/bin/env bash
-# Generate a fresh .env with random secrets for the idp stack
-# (OpenLDAP + Authelia + Stalwart + Bulwark + Vaultwarden).
+# Generate a fresh .env with random secrets for the Authentik identity/mail stack.
 #
 #   scripts/00-generate-env.sh [-o FILE] [--force]
 #
 # - refuses to overwrite an existing file unless --force (creates a backup)
-# - OpenLDAP bootstrap root hashes: argon2 PHC of LDAP_ADMIN_PASSWORD,
-#   generated with the openldap image (slappasswd), $-doubled for compose
-# - OAuth client secret digests: written to authelia/secrets/*_client_secret
-#   (only when OUT is the real .env); the git-tracked configuration.yml references
-#   them via {{ secret "/config/secrets/..." }}
+# - Authentik, Postgres, LDAP outpost and OIDC application credentials are generated
+#   here; enter the OIDC client secrets in matching Authentik providers.
 # - VAULTWARDEN_ADMIN_TOKEN: random token hashed with argon2 via
 #   scripts/vaultwarden-hash-token.sh; plaintext printed ONCE below
 #
-# NOTE: regenerating rotates secrets. Things that do NOT rotate automatically:
-#   * stalwart Directory bindSecret (stored in stalwart's registry) = STALWART_LDAP_BIND_PASSWORD
-#   * LDAP user passwords (admin/user1 were set via ldappasswd) = LDAP_ADMIN_PASSWORD
-#   * authelia bootstrap user1: keep LDAP_ADMIN_PASSWORD in sync or re-run ldappasswd
+# NOTE: regenerating rotates secrets. Keep the same STALWART_LDAP_BIND_PASSWORD
+# configured on the Authentik svc-mail account and in Stalwart's directory config.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
 OUT=".env"
 FORCE=0
+ALLOW_EXISTING_VOLUMES=0
 while [ $# -gt 0 ]; do
     case "$1" in
         -o|--out) OUT="$2"; shift 2 ;;
         -o=*|--out=*) OUT="${1#*=}"; shift ;;
         --force) FORCE=1; shift ;;
+        --allow-existing-volumes) ALLOW_EXISTING_VOLUMES=1; shift ;;
         *) echo "unknown argument: $1" >&2; exit 1 ;;
     esac
 done
@@ -36,16 +32,16 @@ if [ -e "$OUT" ] && [ "$FORCE" -ne 1 ]; then
     exit 1
 fi
 
-# Never mint a new set of secrets over persistent stack data. A deleted .env
-# does not imply that Docker volumes were deleted too.
-if [ "$OUT" = ".env" ] && { [ ! -e "$OUT" ] || [ "$FORCE" -eq 1 ]; }; then
+# Never mint a new set of secrets over persistent stack data without explicit
+# confirmation. Existing volumes are not deleted by this script.
+if [ "$OUT" = ".env" ] && [ "$ALLOW_EXISTING_VOLUMES" -ne 1 ] && { [ ! -e "$OUT" ] || [ "$FORCE" -eq 1 ]; }; then
     project="${COMPOSE_PROJECT_NAME:-$(basename "$PWD" | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9_-]/-/g')}"
     if ! volumes=$(docker volume ls --format '{{.Name}}' 2>/dev/null); then
         echo "error: cannot inspect Docker volumes; refusing to generate secrets without checking persistent data" >&2
         exit 1
     fi
     existing=""
-    for suffix in ldap-data ldap-config authelia-data stalwart-data stalwart-etc bulwark-config bulwark-state vaultwarden-data; do
+    for suffix in ldap-data ldap-config authelia-data postgres-data authentik-media authentik-templates redis-data authentik-db-data authentik-files authentik-templates-data stalwart-data stalwart-etc bulwark-config bulwark-state vaultwarden-data; do
         volume="${project}_${suffix}"
         if printf '%s\n' "$volumes" | grep -Fxq "$volume"; then
             existing="$existing $volume"
@@ -53,8 +49,7 @@ if [ "$OUT" = ".env" ] && { [ ! -e "$OUT" ] || [ "$FORCE" -eq 1 ]; }; then
     done
     if [ -n "$existing" ]; then
         echo "error: refusing to create/rotate .env while stack data volumes exist:$existing" >&2
-        echo "A new LDAP_ADMIN_PASSWORD cannot unlock an existing LDAP volume. Restore the matching .env backup." >&2
-        echo "Only after confirming the data is disposable, remove the project's volumes explicitly, then retry." >&2
+        echo "If those volumes are disposable, rerun with --allow-existing-volumes; this script still will not delete them." >&2
         exit 1
     fi
 fi
@@ -62,22 +57,16 @@ fi
 rand() { openssl rand -hex "$1"; }
 
 ########## secrets ##########
-LDAP_ADMIN_PASSWORD=$(rand 20)          # OpenLDAP root + Authelia LDAP bind
-STALWART_LDAP_BIND_PASSWORD=$(rand 16)  # uid=svc-mail… (mirror lives in stalwart registry)
+PG_PASSWORD=$(rand 32)
+AUTHENTIK_SECRET_KEY=$(rand 32)
+AUTHENTIK_BOOTSTRAP_PASSWORD=$(rand 20)
+AUTHENTIK_LDAP_TOKEN=""                # set after creating the LDAP outpost in Authentik
+STALWART_LDAP_BIND_PASSWORD=$(rand 16)  # set this as the Authentik svc-mail password
 STALWART_ADMIN_PASSWORD=$(rand 16)
 BULWARK_ADMIN_PASSWORD=$(rand 16)
 BULWARK_SESSION_SECRET=$(rand 32)
 BULWARK_OAUTH_SECRET=$(rand 16)
-STALWART_OAUTH_SECRET=$(rand 16)
 VAULTWARDEN_SSO_SECRET=$(rand 16)
-AUTHELIA_JWT_SECRET=$(rand 24)
-AUTHELIA_SESSION_SECRET=$(rand 24)
-AUTHELIA_STORAGE_KEY=$(rand 32)
-
-########## openldap argon2 root hashes ($-doubled for compose interpolation) ##########
-LDAP_PHC=$(docker run --rm --entrypoint slappasswd osixia/openldap:2.6.15-alpha \
-    -h "{ARGON2}" -o module-path=/usr/lib/openldap -o module-load=argon2 -s "$LDAP_ADMIN_PASSWORD")
-LDAP_PHC_ENV=${LDAP_PHC//$/\$\$}
 
 ########## vaultwarden admin token (argon2 PHC, $-doubled) ##########
 RAW_VW_TOKEN=$(rand 24)
@@ -93,27 +82,25 @@ umask 177   # resulting file: 600
 cat > "$OUT" <<EOF
 # auto-generated by scripts/00-generate-env.sh ($(date -u +%Y-%m-%dT%H:%M:%SZ)) — do not commit / do not share
 
-# OpenLDAP (osixia 2.6.15-alpha: only the HASHED root passwords are read)
-LDAP_ADMIN_PASSWORD=$LDAP_ADMIN_PASSWORD
-OPENLDAP_CONFIG_ROOT_PW_HASHED=$LDAP_PHC_ENV
-OPENLDAP_DATA_ROOT_PW_HASHED=$LDAP_PHC_ENV
+# Authentik + PostgreSQL (fresh identity store)
+AUTHENTIK_TAG=2026.8.4
+PG_DB=authentik
+PG_USER=authentik
+PG_PASSWORD=$PG_PASSWORD
+AUTHENTIK_SECRET_KEY=$AUTHENTIK_SECRET_KEY
+AUTHENTIK_BOOTSTRAP_PASSWORD=$AUTHENTIK_BOOTSTRAP_PASSWORD
+AUTHENTIK_LDAP_TOKEN=$AUTHENTIK_LDAP_TOKEN
 
-# Authelia
-AUTHELIA_JWT_SECRET=$AUTHELIA_JWT_SECRET
-AUTHELIA_SESSION_SECRET=$AUTHELIA_SESSION_SECRET
-AUTHELIA_STORAGE_KEY=$AUTHELIA_STORAGE_KEY
-
-# Stalwart (RECOVERY_ADMIN bootstrap; bind pw also stored in stalwart registry)
+# Stalwart + Authentik LDAP outpost
 STALWART_ADMIN_PASSWORD=$STALWART_ADMIN_PASSWORD
 STALWART_LDAP_BIND_PASSWORD=$STALWART_LDAP_BIND_PASSWORD
-STALWART_OAUTH_SECRET=$STALWART_OAUTH_SECRET
 
 # Bulwark (webmail)
 BULWARK_ADMIN_PASSWORD=$BULWARK_ADMIN_PASSWORD
 BULWARK_SESSION_SECRET=$BULWARK_SESSION_SECRET
 BULWARK_OAUTH_SECRET=$BULWARK_OAUTH_SECRET
 
-# Vaultwarden (Authelia OIDC SSO)
+# Vaultwarden (Authentik OIDC SSO)
 VAULTWARDEN_SSO_SECRET=$VAULTWARDEN_SSO_SECRET
 VAULTWARDEN_ADMIN_TOKEN=$VW_PHC_ENV
 
@@ -121,22 +108,12 @@ VAULTWARDEN_ADMIN_TOKEN=$VW_PHC_ENV
 LETSENCRYPT_DIR=/etc/letsencrypt
 EOF
 
-########## write per-host OIDC client secret digests (file-based secrets) ##########
-if [ "$OUT" = ".env" ]; then
-    scripts/generate-authelia-client-secrets.sh "$OUT"
-fi
-
 perm_of() { # octal permissions on the Linux deployment host
     stat -c '%a' "$1" 2>/dev/null || echo '?'
 }
 echo "wrote $OUT ($(perm_of "$OUT"))"
-if [ "$OUT" = ".env" ] && [ -f authelia/configuration.yml ]; then
-    echo "wrote authelia/secrets/{bulwark,stalwart,vaultwarden}_client_secret — mounted read-only into authelia"
-    echo "NOTE: restart authelia to pick them up."
-fi
 echo
 echo "=== print ONLY ONCE — 'vault. … /admin' login ================="
 echo "Vaultwarden admin token (plaintext): $RAW_VW_TOKEN"
 echo "================================================================"
-echo "reminders: rotate = 'docker compose up -d openldap authelia' ; stalwart Directory bindSecret"
-echo "must be updated separately if STALWART_LDAP_BIND_PASSWORD changed."
+echo "reminder: create the matching Authentik OIDC providers and svc-mail account before enabling SSO/LDAP clients."

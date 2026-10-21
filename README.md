@@ -4,14 +4,14 @@
 
 ```text
 Internet
-  ├─ nginx :80/:443 ── idp.june8th.eu.org   → Authelia (SSO/OIDC)
+  ├─ nginx :80/:443 ── idp.june8th.eu.org   → Authentik (user/admin portal + OIDC)
   │                 ├─ mail.june8th.eu.org  → Bulwark (webmail)
   │                 └─ mx.june8th.eu.org    → Stalwart (admin/JMAP)
   ├─ SMTP/IMAP ports ────────────────────── → Stalwart
-  └─ vault.june8th.eu.org                   → Vaultwarden (Authelia OIDC SSO)
+  └─ vault.june8th.eu.org                   → Vaultwarden (Authentik OIDC SSO)
 
-Docker network: Authelia + Stalwart ── OpenLDAP (users and mail accounts)
-Persistent named volumes: LDAP, Authelia, Stalwart, Bulwark, Vaultwarden
+Docker network: Authentik LDAP outpost ── Stalwart (users and mail accounts)
+Persistent named volumes: Authentik/PostgreSQL, Stalwart, Bulwark, Vaultwarden
 ```
 
 | Public ports | Service |
@@ -23,30 +23,65 @@ Persistent named volumes: LDAP, Authelia, Stalwart, Bulwark, Vaultwarden
 ## Quickstart (fresh VPS)
 
 1. Point DNS records below at the VPS. Install a TLS certificate covering `june8th.eu.org` and `*.june8th.eu.org`; nginx and Stalwart mount `/etc/letsencrypt` read-only.
-2. Clone the repo, then run each bootstrap script **once**:
+2. On an existing installation, stop the old stack without deleting its volumes:
 
    ```bash
-   ./scripts/00-generate-env.sh             # creates private .env + OIDC secret digests
-   ./scripts/01-generate-authelia-keys.sh   # creates the per-host OIDC signing key
+   docker compose down --remove-orphans
    ```
 
-   Keep `.env`, `authelia/keys/` and `authelia/secrets/` private. `.env` is gitignored: `git clean -Xdf` can delete it without deleting Docker volumes. Restore the matching `.env` backup if it goes missing; a newly generated LDAP password cannot unlock an existing LDAP volume. The generator refuses to create/rotate `.env` while this Compose project's persistent volumes exist. Do not remove volumes unless their data is disposable.
-3. Bootstrap Stalwart declaratively:
+   This switch does not migrate OpenLDAP accounts or reuse Authelia configuration. Old LDAP, Authelia, and prior Authentik volumes remain untouched and unused.
+
+3. Create a fresh `.env` (do not copy the old identity secrets):
 
    ```bash
-   bash scripts/02-bootstrap-stalwart.sh
+   # Fresh checkout:
+   ./scripts/00-generate-env.sh
+
+   # Existing VPS checkout with the old .env/volumes:
+   ./scripts/00-generate-env.sh --force --allow-existing-volumes
    ```
 
-   The script assumes Stalwart RocksDB at `/var/lib/stalwart`; it starts only the services needed for setup, sets the LDAP `svc-mail` password only if the account has no password yet, starts Stalwart briefly in recovery mode, dry-runs and applies `stalwart/bootstrap.ndjson`, then runs `docker compose down --remove-orphans`. **When the script exits, all project containers are stopped and removed; named volumes are preserved** (it never uses `down -v`). Stalwart runs as root in its container and reads the host's Let's Encrypt files directly through a read-only mount; no host hook or copied certificate volume is used. It configures the LDAP directory, domain, DKIM mode, and TLS certificate without the WebUI wizard. Certbot renews the mounted files, but Stalwart does not reload rotated certificate files automatically: while the stack is running, trigger Stalwart's `ReloadTlsCertificates` action from its CLI or WebUI. Nginx also needs a reload to pick up a renewed certificate (`docker compose exec nginx nginx -s reload`).
+   The second command backs up the old `.env`, but does not reuse its values or migrate identity data. Neither command deletes Docker volumes. Keep the new `.env` private; note the Vaultwarden admin token printed once by the generator.
 
-   Start the full stack only when you want it running:
+4. Start only the edge and Authentik services first. This avoids starting OIDC-only apps before their providers exist:
 
    ```bash
-   docker compose up -d
+   docker compose up -d nginx postgres authentik authentik-worker
+   ```
+
+   Sign in at `https://idp.june8th.eu.org/if/admin/` as `akadmin` using `AUTHENTIK_BOOTSTRAP_PASSWORD` from `.env`. Create your users and groups; Authentik is now the identity source of truth.
+
+5. Create the LDAP application/provider in Authentik Admin (`Applications` → `Applications` → `New Application`, choose **LDAP Provider**) with base DN `dc=ldap,dc=goauthentik,dc=io`. Then:
+   - Create the `svc-mail` service account and set its password to `STALWART_LDAP_BIND_PASSWORD` from `.env`.
+   - Create a role, add `svc-mail` to it, then assign that role **Search full LDAP directory** permission on the LDAP provider. Ensure any application bindings allow `svc-mail`.
+   - Create a **manual LDAP outpost** under `Applications` → `Outposts`, select the LDAP application, and copy its token into `AUTHENTIK_LDAP_TOKEN` in `.env`.
+
+   The LDAP outpost is internal-only and is not published to the Internet. The Stalwart bootstrap script starts it after its provider and token are configured.
+
+6. Create OAuth2/OpenID providers and applications for Bulwark and Vaultwarden. Set their application slugs/client IDs to `bulwark` and `vaultwarden`, use the respective client secrets from `.env`, and register these exact redirect URIs:
+   - Bulwark: `https://mail.june8th.eu.org/auth/callback`
+   - Vaultwarden: `https://vault.june8th.eu.org/identity/connect/oidc-signin`
+
+   Allow the intended users/groups to access each application.
+
+7. Apply the Stalwart directory, domain, and certificate configuration:
+
+   ```bash
+   bash scripts/01-bootstrap-stalwart.sh
+   ```
+
+   The script starts the LDAP outpost and Stalwart in recovery mode, dry-runs then applies `stalwart/bootstrap.ndjson`, and stops/removes all project containers on exit. **Named volumes are preserved**; the script does not use `down -v`.
+
+8. Start the complete stack, including the LDAP outpost, and verify it:
+
+   ```bash
+   docker compose --profile ldap up -d
    docker compose ps
    ```
 
-4. Vaultwarden is enabled with Authelia OIDC-only sign-in. SSO-only sign-in is restricted by Authelia and the `june8th.eu.org` email-domain whitelist. Visit `https://vault.june8th.eu.org`; Authelia is at `https://idp.june8th.eu.org`.
+   Stalwart runs as root in its container and reads Let's Encrypt files from a read-only host mount. After certificate renewal, Stalwart needs `ReloadTlsCertificates`; nginx needs `docker compose exec nginx nginx -s reload` while the stack is running.
+
+9. Visit `https://idp.june8th.eu.org`, `https://mail.june8th.eu.org`, and `https://vault.june8th.eu.org`.
 
 ## DNS records
 
