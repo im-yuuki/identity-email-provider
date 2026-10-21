@@ -1,4 +1,4 @@
-# idp — Identity & Mail stack (docker compose, 1 VPS)
+# Identity & Mail stack (docker compose, 1 VPS)
 
 Domains: `idp.`, `mail.`, `mx.`, `vault.june8th.eu.org`. TLS certs attached manually.
 
