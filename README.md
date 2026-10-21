@@ -62,9 +62,9 @@ Cả nginx và stalwart mount cùng 1 cây cert r/o (`target = /etc/letsencrypt`
 
 - Local: `LETSENCRYPT_DIR` unset → mount `./tls`, tạo bằng `sh scripts/gen-dev-cert.sh` (biết cấu trúc `tls/live/<domain>/fullchain.pem|privkey.pem` giống certbot).
 - VPS: thêm `LETSENCRYPT_DIR=/etc/letsencrypt` vào `.env` rồi `docker compose up -d nginx stalwart` — mount toàn bộ `/etc/letsencrypt` (live + archive, r/o) nên symlink renewal đọc được ngay.
-- Vhost trỏ `ssl_certificate /etc/letsencrypt/live/june8th.eu.org/fullchain.pem` + `privkey.pem` (wildcard `*.june8th.eu.org` → dùng DNS-01: `certbot certonly --cert-name june8th.eu.org --dns-route53...` hoặc plugin DNS nhà cung cấp).
-- Stalwart (SMTP/IMAP chấm dứt TLS trực tiếp): lần đầu import trong WebUI **Settings → TLS → Certificates → from file**, đường dẫn `/etc/letsencrypt/live/june8th.eu.org/fullchain.pem` + `privkey.pem`; sau renewal `docker compose restart stalwart` (hoặc kích hoạt qua JMAP API như discussion #3199 của stalwartlabs).
-- Sau renewal: `docker compose exec nginx nginx -s reload` (đặt vào deploy hook của certbot); kiểm tra: `openssl x509 -in /etc/letsencrypt/live/june8th.eu.org/fullchain.pem -noout -dates`.
+- Vhost trỏ `ssl_certificate /etc/letsencrypt/live/mx.june8th.eu.org/fullchain.pem` + `privkey.pem` (wildcard `*.june8th.eu.org` → dùng DNS-01: `certbot certonly --cert-name june8th.eu.org --dns-route53...` hoặc plugin DNS nhà cung cấp).
+- Stalwart (SMTP/IMAP chấm dứt TLS trực tiếp): lần đầu import trong WebUI **Settings → TLS → Certificates → from file**, đường dẫn `/etc/letsencrypt/live/mx.june8th.eu.org/fullchain.pem` + `privkey.pem`; sau renewal `docker compose restart stalwart` (hoặc kích hoạt qua JMAP API như discussion #3199 của stalwartlabs).
+- Sau renewal: `docker compose exec nginx nginx -s reload` (đặt vào deploy hook của certbot); kiểm tra: `openssl x509 -in /etc/letsencrypt/live/mx.june8th.eu.org/fullchain.pem -noout -dates`.
 
 ## JMAP (desktop clients)
 
