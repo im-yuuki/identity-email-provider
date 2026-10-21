@@ -23,8 +23,11 @@ oauth_digest() {
         | awk '/^Digest: /{print $2}'
 }
 
+# The caller may have umask 177 for the .env file; reset it so the directory
+# keeps its execute bits (700) while the secret files remain private (600).
+umask 077
 mkdir -p authelia/secrets
-umask 177
+chmod 700 authelia/secrets
 for pair in \
     "bulwark_client_secret:BULWARK_OAUTH_SECRET" \
     "stalwart_client_secret:STALWART_OAUTH_SECRET" \
