@@ -29,7 +29,7 @@ services:
       timeout: 3s
       retries: 3
 
-  # ---------- Identity---------- OpenLDAP + Authelia (authentik stack removed 2026-10-23, dev data disposable) ----------
+  # ---------- Identity----------
   openldap:
     image: osixia/openldap:2.6.15-alpha   # 'stable' tag is a broken legacy image (osixia#605); maintainer points to 2.6.x-alpha
     container_name: openldap
@@ -40,6 +40,7 @@ services:
       LDAP_BASE_DN: "dc=june8th,dc=eu,dc=org"
       LDAP_ADMIN_PASSWORD: ${LDAP_ADMIN_PASSWORD}
       LDAP_CONFIG_PASSWORD: ${LDAP_ADMIN_PASSWORD}
+      STALWART_LDAP_BIND_PASSWORD: ${STALWART_LDAP_BIND_PASSWORD}
       LDAP_TLS: "false"   # plain LDAP :389, internal docker net only
       # 2.6.x-alpha image variables (LDAP_* legacy vars are ignored by this image)
       OPENLDAP_BOOTSTRAP_SUFFIX: "dc=june8th,dc=eu,dc=org"
@@ -81,7 +82,7 @@ services:
       # git-managed config + per-host gitignored key, read-only from the host
       - ./authelia/configuration.yml:/config/configuration.yml:ro
       - ./authelia/keys:/config/keys:ro
-      # per-host gitignored OIDC client secret digests (written by scripts/generate-env.sh)
+      # per-host gitignored OIDC client secret digests (written by scripts/00-generate-env.sh)
       - ./authelia/secrets:/config/secrets:ro
     depends_on:
       - openldap
@@ -99,10 +100,12 @@ services:
       - "995:995"
     environment:
       STALWART_RECOVERY_ADMIN: "admin:${STALWART_ADMIN_PASSWORD}"
+      STALWART_LDAP_BIND_PASSWORD: ${STALWART_LDAP_BIND_PASSWORD}
       STALWART_PUBLIC_URL: "https://mx.june8th.eu.org"
     volumes:
       - ${LETSENCRYPT_DIR:-./tls}:/etc/letsencrypt:ro
       - stalwart-etc:/etc/stalwart
+      - ./stalwart/config.json:/etc/stalwart/config.json:ro
       - stalwart-data:/var/lib/stalwart
     healthcheck:
       test: ["CMD-SHELL", "nc -z 127.0.0.1 8080 || exit 1"]
@@ -111,7 +114,6 @@ services:
       start_period: 30s
       retries: 5
 
-  # ---------- Webmail ----------
   bulwark:
     image: ghcr.io/bulwarkmail/webmail:latest
     container_name: bulwark
@@ -137,27 +139,27 @@ services:
       - bulwark-state:/app/data/admin-state
 
   # ---------- Secrets / Vault ----------
-  # vaultwarden:
-  #   image: vaultwarden/server:latest
-  #   container_name: vaultwarden
-  #   restart: unless-stopped
-  #   environment:
-  #     DOMAIN: https://vault.june8th.eu.org
-  #     ADMIN_TOKEN: ${VAULTWARDEN_ADMIN_TOKEN}
-  #     SIGNUPS_ALLOWED: "true"
-  #     SIGNUPS_DOMAINS_WHITELIST: "june8th.eu.org"
-  #     SHOW_PASSWORD_HINT: "false"
-  #     # SSO_ENABLED: "true"
-  #     # SSO_ONLY: "true"
-  #     # SSO_AUTHORITY: "https://idp.june8th.eu.org/application/o/vaultwarden/"
-  #     # SSO_CLIENT_ID: "vaultwarden"
-  #     # SSO_CLIENT_SECRET: "<generated>"
-  #     # SMTP_HOST: "stalwart"
-  #     # SMTP_PORT: 465
-  #     # SMTP_SECURITY: "force_tls"
-  #     # SMTP_USERNAME: "no-reply@june8th.eu.org"
-  #     # SMTP_PASSWORD: "<svc-mail password>"
-  #     # MAIL_FROM: "no-reply@june8th.eu.org"
-  #   volumes:
-  #     - vaultwarden-data:/data
-  #   logging omitted — daemon default (host controls RAM-vs-disk via /etc/docker/daemon.json)
+  vaultwarden:
+    image: vaultwarden/server:latest
+    container_name: vaultwarden
+    restart: unless-stopped
+    environment:
+      DOMAIN: https://vault.june8th.eu.org
+      ADMIN_TOKEN: ${VAULTWARDEN_ADMIN_TOKEN}
+      # Permit first OIDC signup for the domain; SSO_ONLY disables password login.
+      SIGNUPS_ALLOWED: "true"
+      SIGNUPS_DOMAINS_WHITELIST: "june8th.eu.org"
+      SHOW_PASSWORD_HINT: "false"
+      SSO_ENABLED: "true"
+      SSO_ONLY: "true"
+      SSO_AUTHORITY: "https://idp.june8th.eu.org"
+      SSO_CLIENT_ID: "vaultwarden"
+      SSO_CLIENT_SECRET: ${VAULTWARDEN_SSO_SECRET}
+      # SMTP_HOST: "stalwart"
+      # SMTP_PORT: 465
+      # SMTP_SECURITY: "force_tls"
+      # SMTP_USERNAME: "no-reply@june8th.eu.org"
+      # SMTP_PASSWORD: "<svc-mail password>"
+      # MAIL_FROM: "no-reply@june8th.eu.org"
+    volumes:
+      - vaultwarden-data:/data

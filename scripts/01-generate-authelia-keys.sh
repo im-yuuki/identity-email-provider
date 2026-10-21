@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Generate the Authelia OIDC JWKS key: authelia/keys/primary.key (RSA 2048).
 #
-#   scripts/generate-authelia-keys.sh [--force]
+#   scripts/01-generate-authelia-keys.sh [--force]
 #
 # authelia/configuration.yml references this file via the template
 # {{ secret "/config/keys/primary.key" }} — without it the config template

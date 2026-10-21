@@ -95,7 +95,7 @@ identity_providers:
         userinfo_signed_response_alg: 'none'
         token_endpoint_auth_method: 'client_secret_post'
 
-      # Vaultwarden (SSO block stays commented in compose until vault is re-enabled)
+      # Vaultwarden (Authelia OIDC SSO)
       - client_id: 'vaultwarden'
         client_name: 'Vaultwarden'
         client_secret: '{{ secret "/config/secrets/vaultwarden_client_secret" }}'
