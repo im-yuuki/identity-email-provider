@@ -1,7 +1,3 @@
-x-logging: &default-logging
-  driver: json-file
-  options: { max-size: "10m", max-file: "3" }
-
 volumes:
   bulwark-config:
   bulwark-state:
@@ -28,7 +24,6 @@ services:
       - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
       - ${LETSENCRYPT_DIR:-./tls}:/etc/letsencrypt:ro
       - nginx-cache:/var/cache/nginx
-    logging: *default-logging
     healthcheck:
       test: ["CMD", "nginx", "-t"]
       interval: 30s
@@ -46,7 +41,6 @@ services:
       POSTGRES_PASSWORD: ${PG_PASSWORD}
     volumes:
       - postgres-data:/var/lib/postgresql
-    logging: *default-logging
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${PG_USER} -d ${PG_DB}"]
       interval: 10s
@@ -78,7 +72,6 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
-    logging: *default-logging
     healthcheck:
       test: ["CMD-SHELL", "python -c 'import socket; socket.create_connection((\"127.0.0.1\", 9000), 3).close()'"]
       interval: 30s
@@ -111,7 +104,6 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
-    logging: *default-logging
 
   redis:
     image: redis:8-alpine
@@ -120,7 +112,6 @@ services:
     command: --save 60 1 --loglevel warning
     volumes:
       - redis-data:/data
-    logging: *default-logging
     healthcheck:
       test: ["CMD-SHELL", "redis-cli ping | grep PONG"]
       interval: 10s
@@ -145,7 +136,6 @@ services:
       - ${LETSENCRYPT_DIR:-./tls}:/etc/letsencrypt:ro
       - stalwart-etc:/etc/stalwart
       - stalwart-data:/var/lib/stalwart
-    logging: *default-logging
     healthcheck:
       test: ["CMD-SHELL", "nc -z 127.0.0.1 8080 || exit 1"]
       interval: 30s
@@ -170,7 +160,6 @@ services:
     volumes:
       - bulwark-config:/app/data/admin
       - bulwark-state:/app/data/admin-state
-    logging: *default-logging
 
   # ---------- Secrets / Vault ----------
   # vaultwarden:
@@ -196,4 +185,4 @@ services:
   #     # MAIL_FROM: "no-reply@june8th.eu.org"
   #   volumes:
   #     - vaultwarden-data:/data
-  #   logging: *default-logging
+  #   logging omitted — daemon default (host controls RAM-vs-disk via /etc/docker/daemon.json)

@@ -79,6 +79,24 @@ JMAP đã expose qua nginx trên vhost `mx.` (TLS chấm dứt ở nginx, upstre
 
 Client của bạn chỉ cần đặt JMAP URL = `https://mx.june8th.eu.org/.well-known/jmap` (hoặc trực tiếp session endpoint) + account = địa chỉ email đầy đủ.
 
+## Logs (RAM on the real VPS)
+
+Docker has no native in-RAM logging driver. To keep container logs in RAM and protect the VPS disk:
+
+1. `/etc/docker/daemon.json` — let containers inherit the daemon driver, no per-service overrides in compose (this repo already has none):
+   ```json
+   { "log-driver": "journald" }
+   ```
+2. `/etc/systemd/journald.conf` — keep the journal itself in tmpfs/RAM, lost on reboot by design:
+   ```
+   Storage=volatile
+   RuntimeMaxUse=200M
+   ```
+3. `systemctl restart systemd-journald docker && docker compose up -d`
+   `docker logs <container>` and `journalctl -u docker CONTAINER_NAME=<name>` keep working; total RAM cost ≤ 200M.
+
+On the dev Mac (OrbStack) journald is unavailable; OrbStack already caps each container's json-file logs at 20m × 5 files at the daemon level, so nothing is needed here.
+
 ## Ops
 
 ```bash
