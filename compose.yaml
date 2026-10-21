@@ -82,6 +82,8 @@ services:
       # git-managed config + per-host gitignored key, read-only from the host
       - ./authelia/configuration.yml:/config/configuration.yml:ro
       - ./authelia/keys:/config/keys:ro
+      # per-host gitignored OIDC client secret digests (written by scripts/generate-env.sh)
+      - ./authelia/secrets:/config/secrets:ro
     depends_on:
       - openldap
 

@@ -73,7 +73,7 @@ identity_providers:
       # Bulwark webmail (server-side PKCE, callback dropped at /auth/callback)
       - client_id: 'bulwark'
         client_name: 'Bulwark webmail'
-        client_secret: '$pbkdf2-sha512$310000$SoVIToGmKFSwy0nnA6.L4w$VJ.s6Kfzx1Cjd7/1dH0iUjvR8Ww8t5Nf/N1EcaxGLxPUsONfvSHYI.0RB9d8h0N6cDZh6TyrHom9WkLC2E/Jlg'  # digest of $BULWARK_OAUTH_SECRET
+        client_secret: '{{ secret "/config/secrets/bulwark_client_secret" }}'
         public: false
         authorization_policy: 'one_factor'
         consent_mode: 'implicit'   # trusted first-party client — skip the consent screen
@@ -98,7 +98,7 @@ identity_providers:
       # Vaultwarden (SSO block stays commented in compose until vault is re-enabled)
       - client_id: 'vaultwarden'
         client_name: 'Vaultwarden'
-        client_secret: '$pbkdf2-sha512$310000$FJoBc7enXq71/lTq5A/Aog$K39xxpcicn1nBEbToQUtSzGGgGbIqRHpMJmsd3WBLp7VfaVkiTiZUV8M5d7SvVuVjl8JDPIkVSsfRayTErUsRw'  # digest of $VAULTWARDEN_SSO_SECRET
+        client_secret: '{{ secret "/config/secrets/vaultwarden_client_secret" }}'
         public: false
         authorization_policy: 'one_factor'
         consent_mode: 'implicit'   # trusted first-party client
@@ -123,7 +123,7 @@ identity_providers:
       # Stalwart WebUI (broad callback until the exact path is confirmed)
       - client_id: 'stalwart'
         client_name: 'Stalwart Mail'
-        client_secret: '$pbkdf2-sha512$310000$O6jBY8lE.czqjtibaijDzg$WeK1XuOfjidSNGiZ/I7PJrBRRgO5F6rHPSrLJfmY1hdSjUMqbxEHGhVdA2OFP8DFBhHV5aLGmq6CI5xZjh/m5g'  # digest of $STALWART_OAUTH_SECRET
+        client_secret: '{{ secret "/config/secrets/stalwart_client_secret" }}'
         public: false
         authorization_policy: 'one_factor'
         consent_mode: 'implicit'   # trusted first-party client

@@ -7,8 +7,9 @@
 # - refuses to overwrite an existing file unless --force (creates a backup)
 # - OpenLDAP bootstrap root hashes: argon2 PHC of LDAP_ADMIN_PASSWORD,
 #   generated with the openldap image (slappasswd), $-doubled for compose
-# - OAuth client secrets: pbkdf2 digests are written INTO
-#   authelia/configuration.yml automatically (only when OUT is the real .env)
+# - OAuth client secret digests: written to authelia/secrets/*_client_secret
+#   (only when OUT is the real .env); the git-tracked configuration.yml references
+#   them via {{ secret "/config/secrets/..." }}
 # - VAULTWARDEN_ADMIN_TOKEN: random token hashed with argon2 via
 #   scripts/vaultwarden-hash-token.sh; plaintext printed ONCE below
 #
@@ -60,16 +61,6 @@ RAW_VW_TOKEN=$(rand 24)
 VW_PHC=$(printf '%s' "$RAW_VW_TOKEN" | scripts/vaultwarden-hash-token.sh)
 VW_PHC_ENV=${VW_PHC//$/\$\$}
 
-# --- authelia oauth client digests (pbkdf2-sha512 via authelia image) ---
-oauth_digest() {
-    docker run --rm authelia/authelia:4.39.20 \
-        authelia crypto hash generate pbkdf2 --variant sha512 --password "$1" \
-        | awk '/^Digest: /{print $2}'
-}
-DIGEST_BULWARK=$(oauth_digest "$BULWARK_OAUTH_SECRET")
-DIGEST_STALWART=$(oauth_digest "$STALWART_OAUTH_SECRET")
-DIGEST_VW=$(oauth_digest "$VAULTWARDEN_SSO_SECRET")
-
 if [ -e "$OUT" ]; then
     cp "$OUT" "$OUT.bak.$(date +%s)"
 fi
@@ -106,24 +97,9 @@ VAULTWARDEN_ADMIN_TOKEN=$VW_PHC_ENV
 LETSENCRYPT_DIR=/etc/letsencrypt
 EOF
 
-########## sync oauth digests into authelia/configuration.yml ##########
-if [ "$OUT" = ".env" ] && [ -f authelia/configuration.yml ]; then
-    cp authelia/configuration.yml authelia/configuration.yml.bak.digest
-    for pair in "BULWARK_OAUTH_SECRET:$DIGEST_BULWARK" \
-                "STALWART_OAUTH_SECRET:$DIGEST_STALWART" \
-                "VAULTWARDEN_SSO_SECRET:$DIGEST_VW"; do
-        KEY=${pair%%:*}; DIG=${pair#*:}
-        python3 - "$KEY" "$DIG" <<'PYEOF'
-import re, sys
-key, dig = sys.argv[1], sys.argv[2]
-p = "authelia/configuration.yml"
-pat = (r"^(\s*client_secret:\s*').*('\s*#\s*digest of \$" + re.escape(key) + r")\s*$")
-src = open(p).read()
-out = re.sub(pat, lambda m: m.group(1) + dig + m.group(2), src, flags=re.M)
-assert out != src, f"digest marker 'digest of ${{key}}' not found in {p}"
-open(p, "w").write(out)
-PYEOF
-    done
+########## write per-host OIDC client secret digests (file-based secrets) ##########
+if [ "$OUT" = ".env" ]; then
+    scripts/generate-authelia-client-secrets.sh "$OUT"
 fi
 
 perm_of() { # octal permissions, portable: BSD stat -> GNU stat -> fallback
@@ -131,7 +107,7 @@ perm_of() { # octal permissions, portable: BSD stat -> GNU stat -> fallback
 }
 echo "wrote $OUT ($(perm_of "$OUT"))"
 if [ "$OUT" = ".env" ] && [ -f authelia/configuration.yml ]; then
-    echo "synced pbkdf2 digests -> authelia/configuration.yml (backup: authelia/configuration.yml.bak.digest)"
+    echo "wrote authelia/secrets/{bulwark,stalwart,vaultwarden}_client_secret — mounted read-only into authelia"
     echo "NOTE: restart authelia to pick them up."
 fi
 echo

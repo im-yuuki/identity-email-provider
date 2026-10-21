@@ -17,7 +17,7 @@ Secrets live in `.env` (mode 600, auto-generated). Dev cert is a self-signed wil
 
 ## Boot order (first run)
 
-0. Sau khi clone repo lần đầu: `sh scripts/generate-authelia-keys.sh` — sinh `authelia/keys/primary.key` (RSA2048, chmod 600). File này **gitignore có chủ ý**: là private key OIDC, mỗi host phải sinh key riêng. Thiếu nó Authelia **crash-loop**: template `{{ secret "/config/keys/primary.key" }}` fail → toàn bộ rendered config bị discard → chuỗi lỗi "x is required" (ldap/session/storage/oidc...) — không phải lỗi config thật. Chỉ chạy `--force` khi nghi ngờ key bị lộ (xoay key làm mọi token/session đang phát hành vô giá trị).
+0. Fresh host: chạy `sh scripts/generate-env.sh` để tạo `.env` và `authelia/secrets/*_client_secret`, rồi `sh scripts/generate-authelia-keys.sh` để sinh `authelia/keys/primary.key` (RSA2048, chmod 600). Cả secrets dir lẫn signing key đều gitignored, riêng cho từng host. Không chạy `generate-env.sh --force` trên host đang hoạt động trừ khi chủ ý xoay toàn bộ secrets.
 1. `docker compose up -d`
 2. Authelia + OpenLDAP: login SSO portal tại `https://idp.june8th.eu.org` với `uid=admin,ou=people` (mail `admin@june8th.eu.org`) + `LDAP_ADMIN_PASSWORD` từ `.env`. Cây thư mục đã được seed bằng ldif (`openldap/ldif/custom/`): `ou=people` (uid=admin, uid=user1), `ou=services` (uid=svc-mail, uid=svc-stalwart-auth), `ou=groups` (memberOf overlay bật sẵn). Đổi mật khẩu dev mặc định bằng `ldappasswd`.
 3. Stalwart: open `https://mx.june8th.eu.org/admin` first run — 0.16 bootstrap mode. Login `admin` + `STALWART_ADMIN_PASSWORD` from `.env` (pinned via `STALWART_RECOVERY_ADMIN`; no password fishing in logs). Complete the 5-screen wizard (hostname `mx.june8th.eu.org`, default domain, RocksDB defaults, internal directory, console logging, manual DNS), then Settings -> Directory -> add LDAP directory with the values below. (Có thể chạy headless bằng `stalwart-cli` + file plan NDJSON — xem `.private/context.md`.)
@@ -113,7 +113,7 @@ Authelia chạy root trong container nên `/config` là named volume `authelia-d
 docker compose cp authelia:/config/db.sqlite3 ./db.sqlite3.bak
 ```
 
-Mount hiện tại: `./authelia/configuration.yml` + `./authelia/keys` (read-only) + `authelia-data:/config` — chỉ sửa config ở host, container không ghi gì ra ngoài volume.
+Mount hiện tại: `./authelia/configuration.yml`, `./authelia/keys`, `./authelia/secrets` (read-only) + `authelia-data:/config`. OIDC client-secret digest files được tạo bởi `scripts/generate-authelia-client-secrets.sh`; lệnh này có thể chạy lại sau pull để đồng bộ với `.env` hiện có mà không xoay secrets.
 
 Migrate db.sqlite3 mount cũ → volume (một lần, chỉ khi VPS đã chạy bằng mount `./authelia:/config` trước đây):
 
@@ -131,6 +131,7 @@ docker compose up -d
 
 ```bash
 scripts/generate-env.sh [-o FILE] [--force]       # fresh .env with all stack secrets (OpenLDAP+Authelia era)
+scripts/generate-authelia-client-secrets.sh [ENV] # tạo lại digest files, không đổi .env (cần Docker)
 scripts/generate-authelia-keys.sh [--force]       # sinh authelia/keys/primary.key (OIDC signing key) — CHẠY TRƯỚC up -d sau fresh clone
 scripts/vaultwarden-hash-token.sh                 # stdin -> vaultwarden ADMIN_TOKEN argon2id PHC (docker fallback)
 scripts/generate-dev-cert.sh                      # self-signed wildcard -> tls/live/june8th.eu.org/{fullchain,privkey}.pem
@@ -142,8 +143,9 @@ scripts/generate-dev-cert.sh                      # self-signed wildcard -> tls/
 - Gitignored: mỗi host sinh key riêng. Fresh clone cần chạy lại script trước `docker compose up -d`, nếu không Authelia crash-loop (template fail → cả config render bị discard).
 - Chỉ rotate (`--force`) khi nghi lộ key — mọi token/session đang phát hành vô giá trị (user bị văng hết).
 
-- `generate-env.sh` generates: LDAP_ADMIN_PASSWORD (+ both OpenLDAP argon2 bootstrap root hashes via `slappasswd`, `$$`-doubled), Authelia JWT/session/storage secrets, Stalwart admin + LDAP bind passwords, Bulwark/SSO secrets, and the Vaultwarden argon2id PHC token.
-- It ALSO re-syncs the three pbkdf2 client digests in `authelia/configuration.yml` (bulwark/stalwart/vaultwarden) to match the new `*_OAUTH_SECRET` values — restart authelia after regenerating. Sync only runs when writing the real `.env`.
+- `generate-env.sh` generates: LDAP_ADMIN_PASSWORD (+ both OpenLDAP argon2 bootstrap root hashes via `slappasswd`, `$$`-doubled), Authelia JWT/session/storage secrets, Stalwart admin + LDAP bind passwords, Bulwark/SSO secrets, and the Vaultwarden argon2id PHC token. When writing the real `.env`, it also creates the three per-host PBKDF2 client digests in gitignored `authelia/secrets/`.
+- After pulling this file-secret change on a host with an existing `.env`, run `sh scripts/generate-authelia-client-secrets.sh` before restarting Authelia. It reads the existing OAuth secrets and does not rotate `.env` or rewrite tracked config. Do not commit files under `authelia/secrets/`.
+- Restart Authelia after regenerating the client-secret digest files.
 - Rotation does NOT auto-apply to: stalwart's stored `Directory.bindSecret` (registry copy of `STALWART_LDAP_BIND_PASSWORD`), and dev LDAP user passwords (`ldappasswd` needed).
 - `VAULTWARDEN_ADMIN_TOKEN` must be an argon2id PHC string (`$argon2id$...`); plaintext still works but logs `[NOTICE] plain-text ADMIN_TOKEN which is insecure`. The token stored in `.env` is written with `$$` because docker compose interpolates `.env` values (single `$` gets swallowed as a variable name and the hash is corrupted). The `/admin` password = the plaintext input — printed once, not stored.
 - `generate-env.sh` refuses to overwrite an existing `.env` unless `--force` (a backup is kept).

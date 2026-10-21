@@ -6,3 +6,5 @@ tls/*
 authelia/db.sqlite3
 authelia/db.sqlite3.*
 authelia/keys/
+authelia/secrets/
+authelia/configuration.yml.bak.digest
