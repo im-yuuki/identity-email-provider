@@ -8,7 +8,9 @@ if [ ! -f .env ]; then
     exit 1
 fi
 if ! grep -Eq '^AUTHENTIK_LDAP_TOKEN=.+$' .env; then
-    echo "error: AUTHENTIK_LDAP_TOKEN is empty; create the LDAP outpost in Authentik and add its token to .env" >&2
+    echo "error: AUTHENTIK_LDAP_TOKEN is empty." >&2
+    echo "Start Authentik first, create the LDAP application and manual outpost in Admin, then set its token in .env." >&2
+    echo "Do not rerun 00-generate-env.sh to fix this; that would rotate the generated credentials." >&2
     exit 1
 fi
 command -v docker >/dev/null || { echo "error: docker is required" >&2; exit 1; }

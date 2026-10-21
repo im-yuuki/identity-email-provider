@@ -41,7 +41,7 @@ Persistent named volumes: Authentik/PostgreSQL, Stalwart, Bulwark, Vaultwarden
    ./scripts/00-generate-env.sh --force --allow-existing-volumes
    ```
 
-   The second command backs up the old `.env`, but does not reuse its values or migrate identity data. Neither command deletes Docker volumes. Keep the new `.env` private; note the Vaultwarden admin token printed once by the generator.
+   The second command backs up the old `.env`, but does not reuse its values or migrate identity data. Neither command deletes Docker volumes. Keep the new `.env` private; note the Vaultwarden admin token printed once by the generator. Do not rerun the generator to fill in later values, because it rotates all generated secrets.
 
 4. Start only the edge and Authentik services first. This avoids starting OIDC-only apps before their providers exist:
 
@@ -54,7 +54,7 @@ Persistent named volumes: Authentik/PostgreSQL, Stalwart, Bulwark, Vaultwarden
 5. Create the LDAP application/provider in Authentik Admin (`Applications` → `Applications` → `New Application`, choose **LDAP Provider**) with base DN `dc=ldap,dc=goauthentik,dc=io`. Then:
    - Create the `svc-mail` service account and set its password to `STALWART_LDAP_BIND_PASSWORD` from `.env`.
    - Create a role, add `svc-mail` to it, then assign that role **Search full LDAP directory** permission on the LDAP provider. Ensure any application bindings allow `svc-mail`.
-   - Create a **manual LDAP outpost** under `Applications` → `Outposts`, select the LDAP application, and copy its token into `AUTHENTIK_LDAP_TOKEN` in `.env`.
+   - Create a **manual LDAP outpost** under `Applications` → `Outposts`, select the LDAP application, and copy its token into `AUTHENTIK_LDAP_TOKEN` in `.env` (edit the existing file; do not rerun the generator).
 
    The LDAP outpost is internal-only and is not published to the Internet. The Stalwart bootstrap script starts it after its provider and token are configured.
 
@@ -67,7 +67,7 @@ Persistent named volumes: Authentik/PostgreSQL, Stalwart, Bulwark, Vaultwarden
 7. Apply the Stalwart directory, domain, and certificate configuration:
 
    ```bash
-   bash scripts/01-bootstrap-stalwart.sh
+   ./scripts/01-bootstrap-stalwart.sh
    ```
 
    The script starts the LDAP outpost and Stalwart in recovery mode, dry-runs then applies `stalwart/bootstrap.ndjson`, and stops/removes all project containers on exit. **Named volumes are preserved**; the script does not use `down -v`.

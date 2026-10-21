@@ -116,4 +116,6 @@ echo
 echo "=== print ONLY ONCE — 'vault. … /admin' login ================="
 echo "Vaultwarden admin token (plaintext): $RAW_VW_TOKEN"
 echo "================================================================"
-echo "reminder: create the matching Authentik OIDC providers and svc-mail account before enabling SSO/LDAP clients."
+echo "Next: start Authentik, create the LDAP provider/application and manual outpost, then put its token in AUTHENTIK_LDAP_TOKEN in .env."
+echo "Also create the svc-mail account and matching OIDC providers before starting the full stack."
+echo "Do not run scripts/01-bootstrap-stalwart.sh until AUTHENTIK_LDAP_TOKEN is set."
