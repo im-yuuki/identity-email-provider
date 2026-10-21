@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
 # Generate a fresh .env with random secrets for the idp stack.
 #
-#   scripts/gen-env.sh [-o FILE] [--force]
+#   scripts/generate-env.sh [-o FILE] [--force]
 #
 # - refuses to overwrite an existing file unless --force (creates a backup)
 # - VAULTWARDEN_ADMIN_TOKEN: a random token is generated, hashed with argon2
-#   (scripts/vw-hash-token.sh) and only the PHC string goes into .env
+#   (scripts/vaultwarden-hash-token.sh) and only the PHC string goes into .env
 #   ($-escaped for docker compose). The plaintext token is printed ONCE.
 set -euo pipefail
 cd "$(dirname "$0")/.."
@@ -54,7 +54,10 @@ VAULTWARDEN_ADMIN_TOKEN=${VW_PHC_ENV}
 #LETSENCRYPT_DIR=/etc/letsencrypt
 EOF
 
-echo "wrote $OUT ($(stat -f '%Lp' "$OUT"))"
+perm_of() { # octal permissions, portable: BSD stat -> GNU stat -> fallback
+    stat -f '%Lp' "$1" 2>/dev/null || stat -c '%a' "$1" 2>/dev/null || echo '?'
+}
+echo "wrote $OUT ($(perm_of "$OUT"))"
 echo
 echo "=== print ONLY ONCE — enter 'vault. … /admin' when =====     "
 echo "Vaultwarden admin token (plaintext): $RAW_VW_TOKEN"
