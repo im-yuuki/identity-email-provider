@@ -21,8 +21,12 @@ services:
     volumes:
       - ./nginx/conf.d:/etc/nginx/conf.d:ro
       - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
-      - ${LETSENCRYPT_DIR:-./tls}:/etc/letsencrypt:ro
+      - ${LETSENCRYPT_DIR:-/etc/letsencrypt}:/etc/letsencrypt:ro
       - nginx-cache:/var/cache/nginx
+    networks:
+      default:
+        aliases:
+          - idp.june8th.eu.org
     healthcheck:
       test: ["CMD", "nginx", "-t"]
       interval: 30s
@@ -103,7 +107,7 @@ services:
       STALWART_LDAP_BIND_PASSWORD: ${STALWART_LDAP_BIND_PASSWORD}
       STALWART_PUBLIC_URL: "https://mx.june8th.eu.org"
     volumes:
-      - ${LETSENCRYPT_DIR:-./tls}:/etc/letsencrypt:ro
+      - ${LETSENCRYPT_DIR:-/etc/letsencrypt}:/etc/letsencrypt:ro
       - stalwart-etc:/etc/stalwart
       - ./stalwart/config.json:/etc/stalwart/config.json:ro
       - stalwart-data:/var/lib/stalwart
@@ -130,10 +134,6 @@ services:
       OAUTH_ISSUER_URL: "https://idp.june8th.eu.org"
       # login page automatically starts the server-side SSO flow (doc: guides/embedded-sso)
       AUTO_SSO_ENABLED: "true"
-    extra_hosts:
-      # the FQDN of the Authelia issuer must resolve from inside the container
-      # (host /etc/hosts dev mapping otherwise wins): send it to nginx via the host gateway
-      - "idp.june8th.eu.org:host-gateway"
     volumes:
       - bulwark-config:/app/data/admin
       - bulwark-state:/app/data/admin-state

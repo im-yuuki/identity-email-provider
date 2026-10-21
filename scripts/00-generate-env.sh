@@ -36,10 +36,33 @@ if [ -e "$OUT" ] && [ "$FORCE" -ne 1 ]; then
     exit 1
 fi
 
+# Never mint a new set of secrets over persistent stack data. A deleted .env
+# does not imply that Docker volumes were deleted too.
+if [ "$OUT" = ".env" ] && { [ ! -e "$OUT" ] || [ "$FORCE" -eq 1 ]; }; then
+    project="${COMPOSE_PROJECT_NAME:-$(basename "$PWD" | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9_-]/-/g')}"
+    if ! volumes=$(docker volume ls --format '{{.Name}}' 2>/dev/null); then
+        echo "error: cannot inspect Docker volumes; refusing to generate secrets without checking persistent data" >&2
+        exit 1
+    fi
+    existing=""
+    for suffix in ldap-data ldap-config authelia-data stalwart-data stalwart-etc bulwark-config bulwark-state vaultwarden-data; do
+        volume="${project}_${suffix}"
+        if printf '%s\n' "$volumes" | grep -Fxq "$volume"; then
+            existing="$existing $volume"
+        fi
+    done
+    if [ -n "$existing" ]; then
+        echo "error: refusing to create/rotate .env while stack data volumes exist:$existing" >&2
+        echo "A new LDAP_ADMIN_PASSWORD cannot unlock an existing LDAP volume. Restore the matching .env backup." >&2
+        echo "Only after confirming the data is disposable, remove the project's volumes explicitly, then retry." >&2
+        exit 1
+    fi
+fi
+
 rand() { openssl rand -hex "$1"; }
 
 ########## secrets ##########
-LDAP_ADMIN_PASSWORD=$(rand 20)          # openldap root + authelia LDAP bind + dev LDAP users
+LDAP_ADMIN_PASSWORD=$(rand 20)          # OpenLDAP root + Authelia LDAP bind
 STALWART_LDAP_BIND_PASSWORD=$(rand 16)  # uid=svc-mail… (mirror lives in stalwart registry)
 STALWART_ADMIN_PASSWORD=$(rand 16)
 BULWARK_ADMIN_PASSWORD=$(rand 16)
@@ -94,7 +117,7 @@ BULWARK_OAUTH_SECRET=$BULWARK_OAUTH_SECRET
 VAULTWARDEN_SSO_SECRET=$VAULTWARDEN_SSO_SECRET
 VAULTWARDEN_ADMIN_TOKEN=$VW_PHC_ENV
 
-# Real deployment only (VPS). Dev default = ./tls (mimics the letsencrypt layout)
+# Host path containing the Let's Encrypt live/ certificate tree
 LETSENCRYPT_DIR=/etc/letsencrypt
 EOF
 
@@ -103,8 +126,8 @@ if [ "$OUT" = ".env" ]; then
     scripts/generate-authelia-client-secrets.sh "$OUT"
 fi
 
-perm_of() { # octal permissions, portable: BSD stat -> GNU stat -> fallback
-    stat -f '%Lp' "$1" 2>/dev/null || stat -c '%a' "$1" 2>/dev/null || echo '?'
+perm_of() { # octal permissions on the Linux deployment host
+    stat -c '%a' "$1" 2>/dev/null || echo '?'
 }
 echo "wrote $OUT ($(perm_of "$OUT"))"
 if [ "$OUT" = ".env" ] && [ -f authelia/configuration.yml ]; then

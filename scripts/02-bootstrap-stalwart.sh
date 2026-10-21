@@ -44,7 +44,9 @@ docker compose exec -T openldap sh -ec '
   admin="cn=admin,dc=june8th,dc=eu,dc=org"
   svc="uid=svc-mail,ou=services,dc=june8th,dc=eu,dc=org"
   if ! ldapwhoami -x -H "$uri" -D "$admin" -w "$LDAP_ADMIN_PASSWORD" >/dev/null 2>&1; then
-    echo "error: LDAP admin password in .env does not match persisted LDAP data" >&2
+    echo "error: LDAP_ADMIN_PASSWORD in .env does not match the existing ldap-data volume" >&2
+    echo "A newly generated .env cannot authenticate against the old LDAP database." >&2
+    echo "Restore the matching .env backup; do not prune or reinitialize volumes unless the data is disposable." >&2
     exit 1
   fi
   if ldapwhoami -x -H "$uri" -D "$svc" -w "$STALWART_LDAP_BIND_PASSWORD" >/dev/null 2>&1; then

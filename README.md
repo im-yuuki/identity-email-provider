@@ -30,7 +30,7 @@ Persistent named volumes: LDAP, Authelia, Stalwart, Bulwark, Vaultwarden
    ./scripts/01-generate-authelia-keys.sh   # creates the per-host OIDC signing key
    ```
 
-   Keep `.env`, `authelia/keys/` and `authelia/secrets/` private. Do not run `00-generate-env.sh --force` on an initialized host: it rotates credentials.
+   Keep `.env`, `authelia/keys/` and `authelia/secrets/` private. `.env` is gitignored: `git clean -Xdf` can delete it without deleting Docker volumes. Restore the matching `.env` backup if it goes missing; a newly generated LDAP password cannot unlock an existing LDAP volume. The generator refuses to create/rotate `.env` while this Compose project's persistent volumes exist. Do not remove volumes unless their data is disposable.
 3. Bootstrap Stalwart declaratively, then start the rest of the stack:
 
    ```bash

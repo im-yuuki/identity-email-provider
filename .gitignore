@@ -1,5 +1,4 @@
 .env
-tls/*
 .private/
 
 # authelia runtime state + keys
