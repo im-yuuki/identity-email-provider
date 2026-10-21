@@ -104,6 +104,29 @@ docker compose down            # data lives in named volumes, not lost
 
 Vaultwarden: service is commented out in compose.yaml (volume `vaultwarden-data` + `.env` keys retained). After OIDC SSO works, keep `SIGNUPS_ALLOWED=false`. `ADMIN_TOKEN` from `.env` unlocks the `/admin` panel.
 
+### Authelia data lives in a volume (not ./authelia)
+
+Authelia chạy root trong container nên `/config` là named volume `authelia-data` (chứa `db.sqlite3`, `notifications/`). Mount kiểu `./authelia:/config` để lại file `root:root` trên VPS — đã chuyển sang volume + bind read-only:
+
+```bash
+# backup db (không cần project name hardcode):
+docker compose cp authelia:/config/db.sqlite3 ./db.sqlite3.bak
+```
+
+Mount hiện tại: `./authelia/configuration.yml` + `./authelia/keys` (read-only) + `authelia-data:/config` — chỉ sửa config ở host, container không ghi gì ra ngoài volume.
+
+Migrate db.sqlite3 mount cũ → volume (một lần, chỉ khi VPS đã chạy bằng mount `./authelia:/config` trước đây):
+
+```bash
+docker compose down authelia
+VOL="$(basename "$PWD" | tr '[:upper:]' '[:lower:]')_authelia-data"
+docker run --rm -v "$PWD/authelia:/m:ro" -v "$VOL:/d" --entrypoint sh authelia/authelia:4.39.20 \
+  -c 'cp /m/db.sqlite3 /d/db.sqlite3'
+docker compose up -d
+```
+
+(Định danh volume thật bằng `docker volume ls | grep authelia` nếu tên project khác — ví dụ repo này là `identity-email-provider_authelia-data`.)
+
 ## Scripts
 
 ```bash

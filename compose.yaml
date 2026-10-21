@@ -1,15 +1,12 @@
 volumes:
   bulwark-config:
   bulwark-state:
-  postgres-data:
-  authentik-media:
-  authentik-templates:
+  authelia-data:
   stalwart-data:
   stalwart-etc:
   ldap-data:
   ldap-config:
   vaultwarden-data:
-  redis-data:
   nginx-cache:
 
 services:
@@ -79,7 +76,12 @@ services:
       AUTHELIA_AUTHENTICATION_BACKEND_LDAP_PASSWORD: ${LDAP_ADMIN_PASSWORD}
       AUTHELIA_IDENTITY_PROVIDERS_OIDC_HMAC_SECRET: ${AUTHELIA_JWT_SECRET}
     volumes:
-      - ./authelia:/config
+      # state (db.sqlite3, notifications) lives in a named volume: the image runs root,
+      # a writable ./authelia:/config bind left root-owned files on the VPS
+      - authelia-data:/config
+      # git-managed config + per-host gitignored key, read-only from the host
+      - ./authelia/configuration.yml:/config/configuration.yml:ro
+      - ./authelia/keys:/config/keys:ro
     depends_on:
       - openldap
 
