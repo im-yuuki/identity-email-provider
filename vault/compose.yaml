@@ -2,31 +2,8 @@ name: vault
 
 volumes:
   vaultwarden-data:
-  nginx-cache:
 
 services:
-  # ---------- Edge ----------
-  nginx:
-    image: nginx:stable-alpine
-    container_name: vault-nginx
-    restart: unless-stopped
-    ports:
-      - "80:80"
-      - "443:443"
-    volumes:
-      - ./nginx/conf.d:/etc/nginx/conf.d:ro
-      - ../nginx/nginx.conf:/etc/nginx/nginx.conf:ro
-      - ${LETSENCRYPT_DIR:-/etc/letsencrypt}:/etc/letsencrypt:ro
-      - ${CERTBOT_WEBROOT:-/var/www/certbot}:/var/www/certbot:ro
-      - nginx-cache:/var/cache/nginx
-    depends_on:
-      - vaultwarden
-    healthcheck:
-      test: ["CMD", "nginx", "-t"]
-      interval: 30s
-      timeout: 3s
-      retries: 3
-
   # ---------- Password manager ----------
   vaultwarden:
     image: vaultwarden/server:latest
@@ -52,3 +29,6 @@ services:
       # MAIL_FROM: "no-reply@june8th.eu.org"
     volumes:
       - vaultwarden-data:/data
+    # the host nginx terminates TLS and proxies to 127.0.0.1:8081
+    ports:
+      - "127.0.0.1:8081:80"

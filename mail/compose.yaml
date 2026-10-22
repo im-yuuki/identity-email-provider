@@ -5,32 +5,8 @@ volumes:
   stalwart-etc:
   bulwark-config:
   bulwark-state:
-  nginx-cache:
 
 services:
-  # ---------- Edge ----------
-  nginx:
-    image: nginx:stable-alpine
-    container_name: mail-nginx
-    restart: unless-stopped
-    ports:
-      - "80:80"
-      - "443:443"
-    volumes:
-      - ./nginx/conf.d:/etc/nginx/conf.d:ro
-      - ../nginx/nginx.conf:/etc/nginx/nginx.conf:ro
-      - ${LETSENCRYPT_DIR:-/etc/letsencrypt}:/etc/letsencrypt:ro
-      - ${CERTBOT_WEBROOT:-/var/www/certbot}:/var/www/certbot:ro
-      - nginx-cache:/var/cache/nginx
-    depends_on:
-      - stalwart
-      - bulwark
-    healthcheck:
-      test: ["CMD", "nginx", "-t"]
-      interval: 30s
-      timeout: 3s
-      retries: 3
-
   # ---------- Mail server ----------
   # Authentication is delegated to Authentik over OIDC (Directory #authentik-oidc);
   # accounts themselves are local Stalwart accounts, synced with
@@ -41,6 +17,9 @@ services:
     user: "0:0"
     restart: unless-stopped
     ports:
+      # JMAP / admin UI — the host nginx proxies to it
+      - "127.0.0.1:8080:8080"
+      # raw mail ports, directly reachable from the internet
       - "25:25"
       - "465:465"
       - "587:587"
@@ -83,3 +62,6 @@ services:
     volumes:
       - bulwark-config:/app/data/admin
       - bulwark-state:/app/data/admin-state
+    # the host nginx terminates TLS and proxies to 127.0.0.1:3000
+    ports:
+      - "127.0.0.1:3000:3000"

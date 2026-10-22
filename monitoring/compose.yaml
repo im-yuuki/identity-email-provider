@@ -4,28 +4,8 @@ volumes:
   prometheus-data:
   grafana-data:
   alertmanager-data:
-  nginx-cache:
 
 services:
-  # ---------- Edge ----------
-  nginx:
-    image: nginx:stable-alpine
-    container_name: monitoring-nginx
-    restart: unless-stopped
-    ports:
-      - "80:80"
-      - "443:443"
-    volumes:
-      - ./nginx/conf.d:/etc/nginx/conf.d:ro
-      - ../nginx/nginx.conf:/etc/nginx/nginx.conf:ro
-      - ${LETSENCRYPT_DIR:-/etc/letsencrypt}:/etc/letsencrypt:ro
-      - ${CERTBOT_WEBROOT:-/var/www/certbot}:/var/www/certbot:ro
-      - ./nginx/auth:/etc/nginx/auth:ro
-      - nginx-cache:/var/cache/nginx
-    depends_on:
-      - prometheus
-      - grafana
-
   # ---------- Metrics ----------
   prometheus:
     image: prom/prometheus:latest
@@ -42,6 +22,9 @@ services:
       - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
       - ./prometheus/rules:/etc/prometheus/rules:ro
       - prometheus-data:/prometheus
+    # the host nginx proxies the remote-write endpoint to 127.0.0.1:9090
+    ports:
+      - "127.0.0.1:9090:9090"
     depends_on:
       - alertmanager
 
@@ -57,6 +40,9 @@ services:
       # rendered config here before the stack is started
       - ./alertmanager:/etc/alertmanager:ro
       - alertmanager-data:/alertmanager
+    # reachable through an SSH tunnel for debugging
+    ports:
+      - "127.0.0.1:9093:9093"
 
   # ---------- Dashboards ----------
   grafana:
@@ -82,6 +68,9 @@ services:
       - ./grafana/provisioning:/etc/grafana/provisioning:ro
       - ./grafana/dashboards:/var/lib/grafana/dashboards:ro
       - grafana-data:/var/lib/grafana
+    # the host nginx terminates TLS and proxies to 127.0.0.1:3000
+    ports:
+      - "127.0.0.1:3000:3000"
     depends_on:
       - prometheus
 

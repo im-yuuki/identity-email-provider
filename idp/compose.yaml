@@ -4,32 +4,8 @@ volumes:
   authentik-db-data:
   authentik-files:
   authentik-templates-data:
-  nginx-cache:
 
 services:
-  # ---------- Edge ----------
-  nginx:
-    image: nginx:stable-alpine
-    container_name: idp-nginx
-    restart: unless-stopped
-    ports:
-      - "80:80"
-      - "443:443"
-    volumes:
-      - ./nginx/conf.d:/etc/nginx/conf.d:ro
-      - ../nginx/nginx.conf:/etc/nginx/nginx.conf:ro
-      - ${LETSENCRYPT_DIR:-/etc/letsencrypt}:/etc/letsencrypt:ro
-      - ${CERTBOT_WEBROOT:-/var/www/certbot}:/var/www/certbot:ro
-      - nginx-cache:/var/cache/nginx
-    depends_on:
-      authentik:
-        condition: service_healthy
-    healthcheck:
-      test: ["CMD", "nginx", "-t"]
-      interval: 30s
-      timeout: 3s
-      retries: 3
-
   # ---------- Identity ----------
   postgres:
     image: postgres:18-alpine
@@ -69,6 +45,9 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+    # the host nginx terminates TLS and proxies to 127.0.0.1:9000
+    ports:
+      - "127.0.0.1:9000:9000"
     healthcheck:
       test: ["CMD-SHELL", "python -c 'import socket; socket.create_connection((\"127.0.0.1\", 9000), 3).close()'"]
       interval: 30s

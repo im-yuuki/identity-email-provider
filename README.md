@@ -6,10 +6,14 @@ repository.
 
 | Stack | Host | Services | Public endpoints |
 | --- | --- | --- | --- |
-| `idp/` | VPS A | Authentik, PostgreSQL, nginx | `https://idp.june8th.eu.org` |
-| `mail/` | VPS B | Stalwart, Bulwark (webmail), nginx | `https://mail.june8th.eu.org`, `https://mx.june8th.eu.org`, SMTP/IMAP ports |
-| `vault/` | VPS C | Vaultwarden, nginx | `https://vault.june8th.eu.org` |
-| `monitoring/` | VPS D | Prometheus, Alertmanager, Grafana, node-exporter, cAdvisor, nginx | `https://grafana.june8th.eu.org`, `https://metrics.june8th.eu.org/api/v1/write` |
+| `idp/` | VPS A | Authentik, PostgreSQL | `https://idp.june8th.eu.org` |
+| `mail/` | VPS B | Stalwart, Bulwark (webmail) | `https://mail.june8th.eu.org`, `https://mx.june8th.eu.org`, SMTP/IMAP ports |
+| `vault/` | VPS C | Vaultwarden | `https://vault.june8th.eu.org` |
+| `monitoring/` | VPS D | Prometheus, Alertmanager, Grafana, node-exporter, cAdvisor | `https://grafana.june8th.eu.org`, `https://metrics.june8th.eu.org/api/v1/write` |
+
+nginx runs **on the host** (systemd), not in Docker: it terminates TLS and
+reverse-proxies to the containers, which only publish their ports on
+`127.0.0.1`.
 
 Everything talks to everything else over public HTTPS only — no mesh, no
 private network between hosts.
@@ -25,32 +29,37 @@ private network between hosts.
 ## Repository layout
 
 ```
-idp/          Authentik + PostgreSQL + nginx          (VPS A)
-mail/         Stalwart + Bulwark + nginx              (VPS B)
-vault/        Vaultwarden + nginx                     (VPS C)
-monitoring/   Prometheus + Alertmanager + Grafana      (VPS D)
-nginx/        shared nginx.conf (globals, ACME, default server)
+idp/          Authentik + PostgreSQL                   (VPS A)
+mail/         Stalwart + Bulwark                       (VPS B)
+vault/        Vaultwarden                               (VPS C)
+monitoring/   Prometheus + Alertmanager + Grafana       (VPS D)
+nginx/        host nginx: nginx.conf, install.sh, issue-cert.sh
 ```
 
 Each stack directory is self-contained: its own `compose.yaml`, `.env`,
-`nginx/conf.d/` and `scripts/`. Only `nginx/nginx.conf` is shared, so the
-proxy defaults stay identical on all hosts.
+`nginx/conf.d/` (the vhosts of that host) and `scripts/`. `nginx/nginx.conf`
+is shared so the proxy defaults stay identical on all hosts.
 
 ```
 <stack>/
   compose.yaml          # top-level `name:` namespaces the volumes
   .env.example          # template, all secrets empty
-  nginx/conf.d/*.conf   # vhosts of this host
+  nginx/conf.d/*.conf   # vhosts of this host (symlinked into /etc/nginx/conf.d)
   scripts/00-generate-env.sh
   scripts/10-tls.sh
+  scripts/20-install-nginx.sh
 ```
 
 ## Requirements
 
 * One VPS per stack, Ubuntu 24.04 or Debian 13, Docker Engine + Compose v2
-* `certbot`, `openssl`, `curl`, `jq` on the host
+* `certbot`, `openssl`, `curl`, `jq` on the host (nginx is installed by
+  `scripts/20-install-nginx.sh`; HTTP/2 needs nginx ≥ 1.25.1, older versions
+  fall back to HTTP/1.1)
 * A DNS zone for `june8th.eu.org`
-* Ports open: 80, 443 everywhere; 25, 465, 587, 993, 995 on the mail host
+* Ports open: 80, 443 everywhere; 25, 465, 587, 993, 995 on the mail host.
+  The container ports are bound to `127.0.0.1` and are not reachable from
+  outside.
 
 Every host runs the same repository. Clone it wherever you deploy:
 
@@ -69,14 +78,14 @@ exist before they can start.
 ```bash
 cd /opt/identity-email-provider/idp
 scripts/00-generate-env.sh          # prints the Authentik admin password ONCE
-scripts/10-tls.sh                   # issues the certificate (nginx is stopped for it)
+sudo scripts/20-install-nginx.sh    # installs nginx, links the vhosts of this host
+scripts/10-tls.sh                   # issues the certificate (webroot mode, no downtime)
 docker compose up -d
 ```
 
 The certificate is issued as `--cert-name june8th.eu.org` on **every** host, so
-the path inside the containers is always
-`/etc/letsencrypt/live/june8th.eu.org/` — that is what nginx and Stalwart
-hardcode.
+the path is always `/etc/letsencrypt/live/june8th.eu.org/` — that is what nginx
+and Stalwart hardcode.
 
 Then log in at `https://idp.june8th.eu.org` with `akadmin` and the generated
 password and create the users and applications (see below).
@@ -92,6 +101,7 @@ Paste the printed `BULWARK_OAUTH_SECRET` into the `bulwark` OAuth2/OIDC
 provider in Authentik, then:
 
 ```bash
+sudo scripts/20-install-nginx.sh    # mail. + mx.
 scripts/10-tls.sh                   # mail. + mx.
 docker compose up -d
 scripts/01-bootstrap-stalwart.sh    # domain, TLS cert, OIDC directory, settings
@@ -111,6 +121,7 @@ scripts/00-generate-env.sh          # prints the Vaultwarden admin token ONCE
 Paste the printed secret into the `vaultwarden` provider in Authentik, then:
 
 ```bash
+sudo scripts/20-install-nginx.sh
 scripts/10-tls.sh                   # vault.
 docker compose up -d
 ```
@@ -121,6 +132,7 @@ docker compose up -d
 cd /opt/identity-email-provider/monitoring
 scripts/00-generate-env.sh          # prints the Grafana and metrics passwords ONCE
 scripts/10-render-alertmanager.sh   # renders the receivers from .env
+sudo scripts/20-install-nginx.sh
 scripts/10-tls.sh                   # grafana. + metrics.
 docker compose up -d
 ```
@@ -250,9 +262,11 @@ is provisioned as `prometheus` (uid) pointing at `http://prometheus:9090`.
 
 ## TLS
 
-`scripts/10-tls.sh` issues the certificate with certbot in standalone mode
-(nginx is stopped for the request) and installs renewal hooks that stop and
-start nginx again around the renewal:
+nginx runs on the host and terminates TLS; the containers speak plain HTTP on
+`127.0.0.1`. `scripts/10-tls.sh` issues the certificate with certbot in
+**webroot** mode — the host nginx serves `/.well-known/acme-challenge/` from
+`/var/www/certbot`, so there is no downtime and the renewal only reloads
+nginx:
 
 ```bash
 cd /opt/identity-email-provider/<stack>
@@ -261,8 +275,24 @@ scripts/10-tls.sh mail.june8th.eu.org mx.june8th.eu.org   # explicit domains
 certbot renew --dry-run
 ```
 
-Every host uses `--cert-name june8th.eu.org`, so the renewal hooks and the
-container paths stay the same everywhere.
+Every host uses `--cert-name june8th.eu.org`, so the renewal hook and the
+certificate path stay the same everywhere. The renewal reloads nginx and, on
+the mail host, restarts Stalwart (it serves 465/587/993/995 with that
+certificate).
+
+## The host nginx
+
+`sudo scripts/20-install-nginx.sh` (per stack) installs nginx if needed and
+
+* copies `nginx/nginx.conf` to `/etc/nginx/nginx.conf`,
+* symlinks the vhosts of this stack into `/etc/nginx/conf.d/` (the vhosts of
+  other stacks are removed — they point at containers that do not run here),
+* installs the basic-auth file of the monitoring stack,
+* creates `/var/www/certbot` and a placeholder certificate for the catch-all
+  server, then runs `nginx -t` and reloads.
+
+The repository stays the source of truth: `git pull` is enough to update a
+vhost, `systemctl reload nginx` applies it.
 
 ## DNS
 
@@ -308,6 +338,8 @@ safe as the user's master password.
 | Bulwark login loops back to the login page | the browser was blocked by the CORS-less `/.well-known/oauth-authorization-server` answer of Authentik — the `^~ /.well-known/` block in `idp/nginx/conf.d/idp.conf` fixes it |
 | `InvalidIssuer` / audience errors in the Stalwart log | `issuerUrl` must equal the `iss` claim of the token (`.../application/o/bulwark/`) and `requireAudience` must equal the client id `bulwark` |
 | Mail to a new user is rejected | the mailbox does not exist yet — run `mail/scripts/sync-users.sh` |
-| nginx will not start | the certificate is missing — run `scripts/10-tls.sh` first |
-| `nginx -t` fails after a renewal | the renewal hooks stopped nginx; start it again with `docker compose up -d nginx` |
+| `502 Bad Gateway` on a domain | the container is not running or not published on `127.0.0.1` — check `docker compose ps` and the `proxy_pass` target in the vhost |
+| nginx does not start | the vhost or the certificate is broken — `sudo nginx -t` shows the reason; the certificate is issued by `scripts/10-tls.sh` |
+| nginx does not pick up a vhost change | `sudo scripts/20-install-nginx.sh` links the vhosts, `systemctl reload nginx` applies them |
+| The remote-write endpoint answers 401 | the basic-auth file is missing or stale — `sudo scripts/20-install-nginx.sh` installs `monitoring/nginx/auth/metrics.htpasswd` |
 | Grafana shows no data | check `monitoring/prometheus/prometheus.yml` and the `Targets` page of Prometheus |
