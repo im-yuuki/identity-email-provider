@@ -85,7 +85,6 @@ VAULTWARDEN_ADMIN_TOKEN=$VW_PHC_ENV
 # TLS
 ACME_EMAIL=admin@june8th.eu.org
 LETSENCRYPT_DIR=/etc/letsencrypt
-CERTBOT_WEBROOT=/var/www/certbot
 EOF
 
 perm_of() { # octal permissions on the Linux deployment host
@@ -97,4 +96,6 @@ echo "=== print ONLY ONCE — 'vault. … /admin' login ==================="
 echo "Vaultwarden admin token (plaintext): $RAW_VW_TOKEN"
 echo "=================================================================="
 echo "Next: paste VAULTWARDEN_SSO_SECRET into the Authentik provider"
-echo "'vaultwarden', then scripts/10-tls.sh, then docker compose up -d."
+echo "'vaultwarden', then copy the nginx vhost, issue the cert (certbot"
+echo "--cert-name june8th.eu.org -d vault.june8th.eu.org), then"
+echo "docker compose up -d."

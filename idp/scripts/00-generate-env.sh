@@ -81,8 +81,6 @@ AUTHENTIK_BOOTSTRAP_EMAIL=admin@june8th.eu.org
 
 # TLS
 ACME_EMAIL=admin@june8th.eu.org
-LETSENCRYPT_DIR=/etc/letsencrypt
-CERTBOT_WEBROOT=/var/www/certbot
 EOF
 
 perm_of() { # octal permissions on the Linux deployment host
@@ -93,5 +91,6 @@ echo
 echo "=== print ONLY ONCE — Authentik admin login ==================="
 echo "Authentik admin password: $AUTHENTIK_BOOTSTRAP_PASSWORD"
 echo "==============================================================="
-echo "Next: scripts/10-tls.sh, then docker compose up -d, then create the"
-echo "OIDC providers 'bulwark' and 'vaultwarden' in the Authentik admin UI."
+echo "Next: copy the nginx vhost, issue the cert (certbot --cert-name"
+echo "june8th.eu.org -d idp.june8th.eu.org), then docker compose up -d, then"
+echo "create the OIDC providers 'bulwark' and 'vaultwarden' in Authentik."

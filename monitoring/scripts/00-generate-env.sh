@@ -5,8 +5,10 @@
 #
 # - refuses to overwrite an existing file unless --force (keeps a backup)
 # - refuses to rotate secrets while this stack's volumes still hold data
-# - writes the nginx basic-auth file for the remote-write endpoint
 # - prints the Grafana admin password and the metrics basic-auth password ONCE
+#
+# The basic-auth file for the remote-write endpoint is created by hand on
+# the host (see README — `htpasswd -cB /etc/nginx/auth/metrics.htpasswd`).
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
@@ -29,7 +31,7 @@ if [ -e "$OUT" ] && [ "$FORCE" -ne 1 ]; then
 fi
 
 PROJECT="${COMPOSE_PROJECT_NAME:-monitoring}"
-VOLUME_SUFFIXES="prometheus-data grafana-data alertmanager-data nginx-cache"
+VOLUME_SUFFIXES="prometheus-data grafana-data alertmanager-data"
 
 if [ "$ALLOW_EXISTING_VOLUMES" -ne 1 ]; then
     if ! volumes=$(docker volume ls --format '{{.Name}}' 2>/dev/null); then
@@ -49,6 +51,8 @@ if [ "$ALLOW_EXISTING_VOLUMES" -ne 1 ]; then
         exit 1
     fi
 fi
+
+command -v openssl >/dev/null || { echo "error: openssl is required" >&2; exit 1; }
 
 rand() { openssl rand -hex "$1"; }
 
@@ -74,7 +78,9 @@ GRAFANA_ADMIN_PASSWORD=$GRAFANA_ADMIN_PASSWORD
 GRAFANA_ROOT_URL=https://grafana.june8th.eu.org
 GRAFANA_DOMAIN=grafana.june8th.eu.org
 
-# Remote-write endpoint (other projects push their metrics here)
+# Remote-write endpoint (other projects push their metrics here).
+# The same password must be set on the host with:
+#   sudo htpasswd -cB /etc/nginx/auth/metrics.htpasswd metrics
 METRICS_BASIC_AUTH_USER=$METRICS_BASIC_AUTH_USER
 METRICS_BASIC_AUTH_PASSWORD=$METRICS_BASIC_AUTH_PASSWORD
 
@@ -88,31 +94,17 @@ PROMETHEUS_RETENTION=30d
 
 # TLS
 ACME_EMAIL=admin@june8th.eu.org
-LETSENCRYPT_DIR=/etc/letsencrypt
-CERTBOT_WEBROOT=/var/www/certbot
 EOF
-
-# Basic-auth file for the remote-write endpoint.
-# The nginx container reads it as its own "nginx" user (uid 101 in
-# nginx:alpine), so the directory and the file must be readable by "other":
-# 755 / 644. The content is only an APR1 hash of the password.
-mkdir -p nginx/auth
-chmod 755 nginx/auth
-umask 022
-printf '%s:%s\n' "$METRICS_BASIC_AUTH_USER" "$(openssl passwd -apr1 "$METRICS_BASIC_AUTH_PASSWORD")" \
-    > nginx/auth/metrics.htpasswd
-chmod 644 nginx/auth/metrics.htpasswd
-umask 177
 
 perm_of() { # octal permissions on the Linux deployment host
     stat -c '%a' "$1" 2>/dev/null || stat -f '%Lp' "$1" 2>/dev/null || echo '?'
 }
 echo "wrote $OUT ($(perm_of "$OUT"))"
-echo "wrote nginx/auth/metrics.htpasswd ($(perm_of nginx/auth/metrics.htpasswd))"
 echo
 echo "=== print ONLY ONCE ==========================================="
 echo "Grafana admin password: $GRAFANA_ADMIN_PASSWORD"
 echo "Metrics basic-auth password: $METRICS_BASIC_AUTH_PASSWORD"
 echo "==============================================================="
-echo "Next: fill ALERT_WEBHOOK_URL in .env, run scripts/10-render-alertmanager.sh,"
-echo "then scripts/10-tls.sh, then docker compose up -d."
+echo "Next: copy the vhost to /etc/nginx/conf.d/, create"
+echo "/etc/nginx/auth/metrics.htpasswd, run scripts/10-render-alertmanager.sh,"
+echo "then docker compose up -d."

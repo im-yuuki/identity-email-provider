@@ -15,4 +15,3 @@ authelia/configuration.yml.bak.digest
 mail/stalwart/bootstrap.rendered.ndjson
 mail/stalwart/users.ndjson
 monitoring/alertmanager/alertmanager.yml
-monitoring/nginx/auth/

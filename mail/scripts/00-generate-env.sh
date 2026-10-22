@@ -93,7 +93,6 @@ BULWARK_SESSION_SECRET=$BULWARK_SESSION_SECRET
 # TLS
 ACME_EMAIL=admin@june8th.eu.org
 LETSENCRYPT_DIR=/etc/letsencrypt
-CERTBOT_WEBROOT=/var/www/certbot
 EOF
 
 perm_of() { # octal permissions on the Linux deployment host
