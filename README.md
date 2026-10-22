@@ -51,7 +51,7 @@ standard globals.
   compose.yaml          # top-level `name:` namespaces the volumes
   .env.example          # template, all secrets empty
   nginx/conf.d/*.conf   # vhosts of this host (drop into /etc/nginx/conf.d)
-  scripts/00-generate-env.sh
+  scripts/              # 00-generate-env.sh + first-boot / sync scripts
 ```
 
 ## Requirements
@@ -163,7 +163,7 @@ users into Stalwart mailboxes.
 
 ### OIDC applications
 
-Both applications are "OpenID Connect" providers in
+The applications are "OpenID Connect" providers in
 `Authentik → Applications → Providers → Create → OAuth2/OpenID Connect`.
 
 | Provider | Client id | Client secret | Redirect URI | Authorized scopes |
@@ -295,13 +295,14 @@ docker compose exec -u www-data nextcloud php occ maintenance:repair
 ```
 
 Background jobs run via system cron (set by `01-bootstrap-nextcloud.sh`).
-If the system cron is not in place, fall back to AJAX mode:
+If the host cron is not in place yet, switch to the slower AJAX mode
+(only fires on page loads):
 
 ```
-occ background:cron
+occ background:ajax
 ```
 
-reverts to `occ background:ajax` (slower, only fires on page loads).
+and back with `occ background:cron` once the host cron works.
 
 ## Mail
 
@@ -520,8 +521,7 @@ mode.
 | `502 Bad Gateway` on a domain | the container is not running or not published on `127.0.0.1` — check `docker compose ps` and the `proxy_pass` target in the vhost |
 | nginx does not start | the vhost or the certificate is broken — `sudo nginx -t` shows the reason; the certificate is issued with `certbot --cert-name june8th.eu.org` (see [TLS](#tls)) |
 | nginx does not pick up a vhost change | re-copy the file from the repo and `sudo systemctl reload nginx` |
-| remote-write answers 401 | the basic-auth file is missing or stale — see [monitoring host — the basic-auth file](#monitoring-host--the-basic-auth-file) |
-| The remote-write endpoint answers 401 | the basic-auth file is missing or stale — recreate it with `htpasswd -cB` (see [monitoring host — the basic-auth file](#monitoring-host--the-basic-auth-file)) |
+| remote-write answers 401 | the basic-auth file is missing or stale — recreate it with `htpasswd -cB` (see [monitoring host — the basic-auth file](#monitoring-host--the-basic-auth-file)) |
 | Grafana shows no data | check `monitoring/prometheus/prometheus.yml` and the `Targets` page of Prometheus |
 | Nextcloud login redirects to the username/password page | the `user_oidc` provider is not installed or the Authentik provider secret was rotated — re-run `drive/scripts/01-bootstrap-nextcloud.sh` and update `DRIVE_OIDC_SECRET` |
 | Nextcloud `invalid_scope` in the Authentik log | the Authentik `nextcloud` provider is missing the `groups` scope; re-add it (group-based quotas depend on it) |
