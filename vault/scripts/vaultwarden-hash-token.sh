@@ -3,7 +3,7 @@
 # Reads the password/token from stdin and prints an argon2id PHC string
 # ($argon2id$v=19$m=65540,t=3,p=4$...) ready to use as ADMIN_TOKEN.
 #
-#   echo -n 'mypassword' | scripts/vw-hash-token.sh
+#   echo -n 'mypassword' | scripts/vaultwarden-hash-token.sh
 #
 # Vaultwarden detects the $argon2id$ prefix automatically; params travel in
 # the string itself, so any argon2id preset works. Plaintext tokens still

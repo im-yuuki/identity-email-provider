@@ -1,0 +1,85 @@
+name: mail
+
+volumes:
+  stalwart-data:
+  stalwart-etc:
+  bulwark-config:
+  bulwark-state:
+  nginx-cache:
+
+services:
+  # ---------- Edge ----------
+  nginx:
+    image: nginx:stable-alpine
+    container_name: mail-nginx
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./nginx/conf.d:/etc/nginx/conf.d:ro
+      - ../nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+      - ${LETSENCRYPT_DIR:-/etc/letsencrypt}:/etc/letsencrypt:ro
+      - ${CERTBOT_WEBROOT:-/var/www/certbot}:/var/www/certbot:ro
+      - nginx-cache:/var/cache/nginx
+    depends_on:
+      - stalwart
+      - bulwark
+    healthcheck:
+      test: ["CMD", "nginx", "-t"]
+      interval: 30s
+      timeout: 3s
+      retries: 3
+
+  # ---------- Mail server ----------
+  # Authentication is delegated to Authentik over OIDC (Directory #authentik-oidc);
+  # accounts themselves are local Stalwart accounts, synced with
+  # scripts/sync-users.sh.
+  stalwart:
+    image: ghcr.io/stalwartlabs/stalwart:v0.16.27-alpine
+    container_name: mail-stalwart
+    user: "0:0"
+    restart: unless-stopped
+    ports:
+      - "25:25"
+      - "465:465"
+      - "587:587"
+      - "993:993"
+      - "995:995"
+    environment:
+      # First-boot admin; remove the variable once a permanent admin exists.
+      STALWART_RECOVERY_ADMIN: "admin:${STALWART_ADMIN_PASSWORD}"
+      STALWART_PUBLIC_URL: "https://${MX_HOSTNAME:-mx.june8th.eu.org}"
+    volumes:
+      - ${LETSENCRYPT_DIR:-/etc/letsencrypt}:/etc/letsencrypt:ro
+      - stalwart-etc:/etc/stalwart
+      - ./stalwart/config.json:/etc/stalwart/config.json:ro
+      - stalwart-data:/var/lib/stalwart
+    healthcheck:
+      test: ["CMD-SHELL", "nc -z 127.0.0.1 8080 || exit 1"]
+      interval: 30s
+      timeout: 10s
+      start_period: 30s
+      retries: 5
+
+  # ---------- Webmail ----------
+  bulwark:
+    image: ghcr.io/bulwarkmail/webmail:latest
+    container_name: mail-bulwark
+    restart: unless-stopped
+    environment:
+      JMAP_SERVER_URL: http://stalwart:8080
+      ADMIN_PASSWORD: ${BULWARK_ADMIN_PASSWORD}
+      SESSION_SECRET: ${BULWARK_SESSION_SECRET}
+      # OIDC provider "bulwark" in Authentik. The issuer URL must have NO
+      # trailing slash: Bulwark appends .well-known/openid-configuration.
+      OAUTH_ENABLED: "true"
+      OAUTH_ONLY: "true"
+      OAUTH_CLIENT_ID: ${BULWARK_OAUTH_CLIENT_ID:-bulwark}
+      OAUTH_CLIENT_SECRET: ${BULWARK_OAUTH_SECRET}
+      OAUTH_ISSUER_URL: "${IDP_URL:-https://idp.june8th.eu.org}/application/o/${BULWARK_OAUTH_CLIENT_ID:-bulwark}"
+      # login page automatically starts the server-side SSO flow (doc: guides/embedded-sso)
+      AUTO_SSO_ENABLED: "true"
+    volumes:
+      - bulwark-config:/app/data/admin
+      - bulwark-state:/app/data/admin-state

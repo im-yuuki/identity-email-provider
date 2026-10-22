@@ -1,4 +1,0 @@
-{
-  "@type": "RocksDb",
-  "path": "/var/lib/stalwart/"
-}

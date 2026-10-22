@@ -1,0 +1,13 @@
+apiVersion: 1
+
+providers:
+  - name: june8th
+    orgId: 1
+    folder: june8th
+    type: file
+    disableDeletion: true
+    updateIntervalSeconds: 30
+    allowUiUpdates: true
+    options:
+      path: /var/lib/grafana/dashboards
+      foldersFromFilesStructure: false

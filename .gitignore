@@ -10,3 +10,9 @@ authelia/configuration.yml.bak.digest
 
 # local Authentik environment and generated secrets
 .env.*.local
+
+# generated at deploy time (rendered from templates + .env)
+mail/stalwart/bootstrap.rendered.ndjson
+mail/stalwart/users.ndjson
+monitoring/alertmanager/alertmanager.yml
+monitoring/nginx/auth/

@@ -1,0 +1,50 @@
+global:
+  scrape_interval: 30s
+  evaluation_interval: 30s
+  external_labels:
+    monitor: june8th
+
+rule_files:
+  - /etc/prometheus/rules/*.yml
+
+alerting:
+  alertmanagers:
+    - static_configs:
+        - targets: ["alertmanager:9093"]
+
+scrape_configs:
+  - job_name: prometheus
+    static_configs:
+      - targets: ["localhost:9090"]
+        labels:
+          host: monitoring
+
+  - job_name: node-exporter
+    static_configs:
+      - targets: ["node-exporter:9100"]
+
+  - job_name: cadvisor
+    static_configs:
+      - targets: ["cadvisor:8080"]
+
+  # --- other projects ---------------------------------------------------
+  # Scrape an endpoint that exposes /metrics:
+  #
+  # - job_name: "project-x"
+  #   metrics_path: /metrics
+  #   scrape_interval: 30s
+  #   static_configs:
+  #     - targets: ["project-x.example.com:9090"]
+  #       labels:
+  #         project: project-x
+  #
+  # Or let the project push to this Prometheus (remote-write):
+  #
+  #   remote_write:
+  #     - url: "https://metrics.june8th.eu.org/api/v1/write"
+  #       basic_auth:
+  #         username: "metrics"
+  #         password: "<METRICS_BASIC_AUTH_PASSWORD from monitoring/.env>"
+  #
+  # Jobs that push their metrics carry the "project" label; the shipped
+  # dashboards group by it.
