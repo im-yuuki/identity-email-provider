@@ -1,0 +1,93 @@
+name: drive
+
+# Nextcloud 35 (server 35.0.2) — AGPL-3.0, image maintained by the community.
+# Pin the tag, do not use :latest.
+#
+# Host nginx terminates TLS and proxies to 127.0.0.1:8090 (Apache in container).
+# PostgreSQL and Redis are not published; only the Nextcloud container talks
+# to them on the default Compose network.
+#
+# Apps installed by 01-bootstrap-nextcloud.sh:
+#   user_oidc (community)            — OIDC login against Authentik
+#   end_to_end_encryption (community) — client-side E2EE folders
+
+volumes:
+  nextcloud-data:    # /var/www/html — code, themes, installed apps, user files
+  nextcloud-db-data: # pgdata
+
+services:
+  # ---------- Database ----------
+  db:
+    image: postgres:16-alpine
+    container_name: drive-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${DRIVE_DB_NAME:-nextcloud}
+      POSTGRES_USER: ${DRIVE_DB_USER:-nextcloud}
+      POSTGRES_PASSWORD: ${DRIVE_DB_PASSWORD}
+    volumes:
+      - nextcloud-db-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${DRIVE_DB_USER:-nextcloud} -d ${DRIVE_DB_NAME:-nextcloud}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ---------- Cache / file locking ----------
+  redis:
+    image: redis:7-alpine
+    container_name: drive-redis
+    restart: unless-stopped
+    # requirepass is set via CMD so it is not visible in `docker inspect`
+    command:
+      - redis-server
+      - --requirepass
+      - ${DRIVE_REDIS_PASSWORD}
+      - --save
+      - ""
+      - --appendonly
+      - "no"
+
+  # ---------- Nextcloud ----------
+  nextcloud:
+    image: nextcloud:35.0.2-apache
+    container_name: drive-nextcloud
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_started
+    environment:
+      # --- auto-install on first boot ---
+      POSTGRES_HOST: db
+      POSTGRES_DB: ${DRIVE_DB_NAME:-nextcloud}
+      POSTGRES_USER: ${DRIVE_DB_USER:-nextcloud}
+      POSTGRES_PASSWORD: ${DRIVE_DB_PASSWORD}
+      NEXTCLOUD_ADMIN_USER: ${DRIVE_ADMIN_USER}
+      NEXTCLOUD_ADMIN_PASSWORD: ${DRIVE_ADMIN_PASSWORD}
+      NEXTCLOUD_INIT_HTACCESS: "true"
+      NEXTCLOUD_REDIS_HOST: redis
+      NEXTCLOUD_REDIS_PORT: "6379"
+      NEXTCLOUD_REDIS_PASSWORD: ${DRIVE_REDIS_PASSWORD}
+      REDIS_HOST: redis
+      REDIS_PORT: "6379"
+      REDIS_HOST_PASSWORD: ${DRIVE_REDIS_PASSWORD}
+
+      # --- URL / proxy hardening (host nginx terminates TLS) ---
+      TRUSTED_CACERTS_DIR: /etc/ssl/certs
+      OVERWRITECLI_URL: https://${DRIVE_HOSTNAME:-drive.june8th.eu.org}
+      OVERWRITEPROTOCOL: https
+      APACHE_DISABLE_REWRITE_IP: "1"
+    volumes:
+      - nextcloud-data:/var/www/html
+      # the host's CA bundle is mounted read-only so the trust chain used
+      # to talk to Authentik is consistent with what the browser sees
+      - /etc/ssl/certs/ca-certificates.crt:/etc/ssl/certs/ca-certificates.crt:ro
+    ports:
+      - "127.0.0.1:8090:80"
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://localhost/status.php || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 5

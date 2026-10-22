@@ -1,14 +1,15 @@
-# Identity, Mail, Vault and Monitoring stacks
+# Identity, Mail, Vault, Drive and Monitoring stacks
 
-Self-hosted identity provider, mail server, password manager and a small
-observability stack, split over four VPS and deployed from this single
-repository.
+Self-hosted identity provider, mail server, password manager, file sync &
+share, and a small observability stack, split over five VPS and deployed
+from this single repository.
 
 | Stack | Host | Services | Public endpoints |
 | --- | --- | --- | --- |
 | `idp/` | VPS A | Authentik, PostgreSQL | `https://idp.june8th.eu.org` |
 | `mail/` | VPS B | Stalwart, Bulwark (webmail) | `https://mail.june8th.eu.org`, `https://mx.june8th.eu.org`, SMTP/IMAP ports |
 | `vault/` | VPS C | Vaultwarden | `https://vault.june8th.eu.org` |
+| `drive/` | VPS E | Nextcloud, PostgreSQL, Redis | `https://drive.june8th.eu.org`, `https://drive.june8th.eu.org/remote.php/dav/` |
 | `monitoring/` | VPS D | Prometheus, Alertmanager, Grafana, node-exporter, cAdvisor | `https://grafana.june8th.eu.org`, `https://metrics.june8th.eu.org/api/v1/write` |
 
 nginx runs **on the host** (systemd), not in Docker: it terminates TLS and
@@ -18,11 +19,13 @@ reverse-proxies to the containers, which only publish their ports on
 Everything talks to everything else over public HTTPS only — no mesh, no
 private network between hosts.
 
-* **Authentik** is the single identity provider (OIDC) for Bulwark and
-  Vaultwarden.
+* **Authentik** is the single identity provider (OIDC) for Bulwark,
+  Vaultwarden and Nextcloud.
 * **Stalwart** authenticates mail users against Authentik over OIDC and
   stores the mailboxes itself.
 * **Vaultwarden** authenticates against Authentik over OIDC.
+* **Nextcloud** authenticates against Authentik over OIDC; per-user quota
+  is set from Authentik groups (see `drive/`).
 * **Prometheus** collects metrics from every stack and from other projects
   (scrape and/or remote-write) and hands alerts to **Alertmanager**.
 
@@ -32,6 +35,7 @@ private network between hosts.
 idp/          Authentik + PostgreSQL                   (VPS A)
 mail/         Stalwart + Bulwark                       (VPS B)
 vault/        Vaultwarden                               (VPS C)
+drive/        Nextcloud + PostgreSQL + Redis            (VPS E)
 monitoring/   Prometheus + Alertmanager + Grafana       (VPS D)
 ```
 
@@ -129,6 +133,26 @@ scripts/10-render-alertmanager.sh   # renders the receivers from .env
 docker compose up -d
 ```
 
+### 5. VPS E — drive (Nextcloud)
+
+```bash
+cd /opt/identity-email-provider/drive
+scripts/00-generate-env.sh          # prints the Nextcloud admin password ONCE
+```
+
+Paste the printed `DRIVE_OIDC_SECRET` into the `nextcloud` OAuth2/OIDC
+provider in Authentik (scopes must include `groups`, **no `quota` claim**
+— the quota is owned by `sync-users.sh`), then:
+
+```bash
+docker compose up -d
+scripts/01-bootstrap-nextcloud.sh   # install user_oidc + E2EE apps, configure
+scripts/sync-users.sh               # pre-provision users + group→quota
+```
+
+`01-bootstrap-nextcloud.sh` is idempotent. `sync-users.sh` is also
+idempotent: re-run it whenever a user is added or moved between groups.
+
 ## Authentik setup
 
 ### Users
@@ -146,6 +170,7 @@ Both applications are "OpenID Connect" providers in
 | --- | --- | --- | --- | --- |
 | `bulwark` | `bulwark` | value printed by `mail/scripts/00-generate-env.sh` | `https://mail.june8th.eu.org/auth/callback` and `https://mail\.[a-z0-9.-]+\.june8th\.eu\.org/.*/auth/callback` | `openid`, `profile`, `email`, `offline_access` |
 | `vaultwarden` | `vaultwarden` | value printed by `vault/scripts/00-generate-env.sh` | `https://vault.june8th.eu.org/identity/connect/oidc-signin` | `openid`, `profile`, `email` |
+| `nextcloud` | `nextcloud` | value printed by `drive/scripts/00-generate-env.sh` | `https://drive.june8th.eu.org/apps/oidc/callback` | `openid`, `profile`, `email`, `groups` |
 
 Notes:
 
@@ -156,6 +181,10 @@ Notes:
   callback path (`/en/auth/callback`), hence the regex entry.
 * Subject mapping: `email` — Stalwart maps the token to the mailbox address
   with it.
+* The Nextcloud provider **must not** have a `quota` claim mapped. The
+  `user_oidc` app re-applies the claim on every login and would overwrite
+  any quota an admin sets via the UI. Per-user quota is set by
+  `drive/scripts/sync-users.sh` based on Authentik group membership.
 
 ### API token for the user sync
 
@@ -167,6 +196,112 @@ read access to `core/users` (or use `akadmin`) and put its token in
 ```
 AUTHENTIK_API_TOKEN=...
 ```
+
+`drive/scripts/sync-users.sh` reuses the same token.
+
+## Drive
+
+Nextcloud on VPS E. Log in is OIDC-only against Authentik — the password
+set by `sync-users.sh` is random and never used.
+
+### Apps installed by `01-bootstrap-nextcloud.sh`
+
+| App | Source | Purpose |
+| --- | --- | --- |
+| `user_oidc` | community (AGPL) | OIDC login against Authentik, auto-provisioning, group mapping |
+| `end_to_end_encryption` | community (AGPL) | Client-side E2EE folders (desktop/mobile clients) |
+| `files_sharing`, `files_trashbin`, `files_versions` | shipped | baseline file features |
+
+Versions are pinned to the `nextcloud:35.0.2-apache` image; do not switch
+to `:latest` — community-maintained image, no auto-update.
+
+### Per-user quota (group-based)
+
+`drive/.env`:
+
+```
+DRIVE_DEFAULT_QUOTA=5 GB
+DRIVE_QUOTA_GROUPS=staff=50 GB,backup=200 GB
+```
+
+`drive/scripts/sync-users.sh` reads the active Authentik users, picks the
+highest-priority group from `DRIVE_QUOTA_GROUPS` (left to right), falls
+back to `DRIVE_DEFAULT_QUOTA`, and writes the value to the
+`oc_preferences` row directly:
+
+```bash
+cd /opt/identity-email-provider/drive
+scripts/sync-users.sh                # all active Authentik users of the domain
+scripts/sync-users.sh --dry-run
+scripts/sync-users.sh --emails a@b.c,d@e.f
+```
+
+Re-run whenever a user is added or moved between groups. The same token
+(`AUTHENTIK_API_TOKEN`) is reused.
+
+The `quota` claim is **not** mapped in Authentik. The `user_oidc` app
+re-applies that claim on every login and would silently overwrite the
+quota set by this script.
+
+### Native file access (WebDAV)
+
+Nextcloud exposes WebDAV at `https://drive.june8th.eu.org/remote.php/dav/`.
+Users authenticate with an **app password** (Settings → Security → App
+passwords) — OIDC logins cannot be replayed by macOS Finder or Windows
+Explorer.
+
+* **macOS Finder**: ⌘K → `https://<user>@drive.june8th.eu.org/remote.php/dav/`
+  (use the app password when prompted; `mount_webdav` requires DAV LOCK,
+  writes need the basic-auth app password).
+* **Windows Explorer**: `Win+R` → `\\drive.june8th.eu.org@SSL\remote.php\dav\`.
+  Windows 11 23H2+ deprecates the WebClient service — known limits: 4 GB
+  per file (`FileSizeLimitInBytes` registry tweak), 260-char paths,
+  Basic/Digest only.
+* **Linux**: `davfs2` or `gvfs` (Files app); or `rclone mount
+  :webdav:... /mnt/drive`.
+* **Desktop sync client** (Nextcloud desktop ≥ 3.13 / Android ≥ 3.13 /
+  iOS ≥ 3.0.5): mounts the full account, including E2EE folders.
+
+### Client-side E2EE folders
+
+The `end_to_end_encryption` app keeps content + filenames + subfolder
+names encrypted on the server (AES-256-GCM, master key derived
+client-side). Trade-offs:
+
+* Web UI can only **view and download** encrypted files; upload / move
+  / delete requires the desktop or mobile client.
+* **WebDAV cannot write into E2EE folders** — the `LockPlugin` rejects
+  non-E2EE user agents (Finder, Explorer, rclone). For the same reason
+  do not use E2EE folders for shared working directories; share normal
+  folders instead.
+* Known upstream issues: #210 (Finder breaks after enabling), #244
+  (deleted files skip trash), #489 (cannot delete non-encrypted files),
+  #8379 (client-not-allowed).
+* Sharing E2EE folders with another user is long broken; only public
+  encrypted shares / file drop are supported (since v2.1).
+* Storage accounting: encrypted bytes count against the user's quota.
+  The trash bin keeps a default 50% of the remaining quota for
+  non-expired deletes.
+
+### Admin tasks
+
+```bash
+cd /opt/identity-email-provider/drive
+docker compose exec -u www-data nextcloud php occ user:list
+docker compose exec -u www-data nextcloud php occ user:info <user>
+docker compose exec -u www-data nextcloud php occ user:setting <user> files quota "10 GB"
+docker compose exec -u www-data nextcloud php occ app:list
+docker compose exec -u www-data nextcloud php occ maintenance:repair
+```
+
+Background jobs run via system cron (set by `01-bootstrap-nextcloud.sh`).
+If the system cron is not in place, fall back to AJAX mode:
+
+```
+occ background:cron
+```
+
+reverts to `occ background:ajax` (slower, only fires on page loads).
 
 ## Mail
 
@@ -302,6 +437,10 @@ sudo certbot certonly --webroot -w /var/www/certbot \
     --non-interactive --agree-tos --email admin@june8th.eu.org \
     --cert-name june8th.eu.org \
     -d idp.june8th.eu.org
+sudo certbot certonly --webroot -w /var/www/certbot \
+    --non-interactive --agree-tos --email admin@june8th.eu.org \
+    --cert-name june8th.eu.org \
+    -d drive.june8th.eu.org
 # ...and so on for every domain of the host
 ```
 
@@ -334,6 +473,7 @@ sudo certbot renew --dry-run
 | `mail.june8th.eu.org` | A | IP of VPS B |
 | `mx.june8th.eu.org` | A | IP of VPS B |
 | `vault.june8th.eu.org` | A | IP of VPS C |
+| `drive.june8th.eu.org` | A | IP of VPS E |
 | `grafana.june8th.eu.org` | A | IP of VPS D |
 | `metrics.june8th.eu.org` | A | IP of VPS D |
 | `june8th.eu.org` | MX | `mx.june8th.eu.org` |
@@ -359,9 +499,16 @@ Volumes worth backing up:
 | B | `mail_stalwart-data` | mailboxes, DKIM keys, configuration |
 | C | `vault_vaultwarden-data` | encrypted vaults and attachments |
 | D | `monitoring_prometheus-data` | metric history |
+| E | `drive_nextcloud-data`, `drive_nextcloud-db-data` | user files, Nextcloud code, installed apps, `config.php`, the PostgreSQL cluster |
 
 `vault_vaultwarden-data` holds encrypted vault data — the backup is only as
 safe as the user's master password.
+
+For Nextcloud: restore `nextcloud-data` (code + `config/` + `apps/` +
+user files) and `nextcloud-db-data` together. `nextcloud-data/config/config.php`
+contains the `instanceid` and `secret` referenced from the database; a
+mismatch between the two backups puts the installation in maintenance
+mode.
 
 ## Troubleshooting
 
@@ -376,3 +523,8 @@ safe as the user's master password.
 | remote-write answers 401 | the basic-auth file is missing or stale — see [monitoring host — the basic-auth file](#monitoring-host--the-basic-auth-file) |
 | The remote-write endpoint answers 401 | the basic-auth file is missing or stale — recreate it with `htpasswd -cB` (see [monitoring host — the basic-auth file](#monitoring-host--the-basic-auth-file)) |
 | Grafana shows no data | check `monitoring/prometheus/prometheus.yml` and the `Targets` page of Prometheus |
+| Nextcloud login redirects to the username/password page | the `user_oidc` provider is not installed or the Authentik provider secret was rotated — re-run `drive/scripts/01-bootstrap-nextcloud.sh` and update `DRIVE_OIDC_SECRET` |
+| Nextcloud `invalid_scope` in the Authentik log | the Authentik `nextcloud` provider is missing the `groups` scope; re-add it (group-based quotas depend on it) |
+| WebDAV returns 401 | OIDC logins cannot be replayed by WebDAV clients — generate an app password in the Nextcloud Security settings and use that for Finder / Explorer / `rclone` |
+| WebDAV writes into an E2EE folder fail with `403 Client not allowed` | the `LockPlugin` of `end_to_end_encryption` rejects non-E2EE user agents — mount the E2EE folder through the Nextcloud desktop or mobile client, or use a non-E2EE folder for that share |
+| Nextcloud quota is reset on every login | the Authentik `nextcloud` provider has a `quota` claim mapped; remove it — `drive/scripts/sync-users.sh` is the source of truth for quotas |
