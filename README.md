@@ -40,8 +40,8 @@ monitoring/   Prometheus + Alertmanager + Grafana       (VPS D)
 ```
 
 Each stack directory is self-contained: its own `compose.yaml`, `.env`,
-`nginx/conf.d/` (the vhosts of this host — drop into `/etc/nginx/conf.d/`
-on the VPS that runs the stack) and `scripts/`. There is no shared
+the nginx vhost file(s) of this host (drop into `/etc/nginx/conf.d/` on
+the VPS that runs the stack) and `scripts/`. There is no shared
 `nginx.conf` in the repo; the vhosts are self-contained (they set the
 `X-Forwarded-*` headers inline), so the host `nginx.conf` only needs the
 standard globals.
@@ -50,7 +50,7 @@ standard globals.
 <stack>/
   compose.yaml          # top-level `name:` namespaces the volumes
   .env.example          # template, all secrets empty
-  nginx/conf.d/*.conf   # vhosts of this host (drop into /etc/nginx/conf.d)
+  *.conf                # nginx vhosts of this host (drop into /etc/nginx/conf.d)
   scripts/              # 00-generate-env.sh + first-boot / sync scripts
 ```
 
@@ -379,7 +379,7 @@ remote_write:
 ```
 
 Restrict the endpoint to the IPs of the projects that push by uncommenting the
-`allow`/`deny` lines in `monitoring/nginx/conf.d/metrics.conf`. The Prometheus
+`allow`/`deny` lines in `monitoring/metrics.conf`. The Prometheus
 UI itself is not exposed — Grafana is the front door.
 
 ### Dashboards
@@ -390,7 +390,7 @@ is provisioned as `prometheus` (uid) pointing at `http://prometheus:9090`.
 
 ## The host nginx
 
-Each stack ships its vhost as a single file in `<stack>/nginx/conf.d/`. Drop
+Each stack ships its vhost(s) as `.conf` files in the stack root. Drop
 the file(s) of the stack you are deploying into `/etc/nginx/conf.d/` on the
 VPS that runs that stack. They listen on 80 + 443 and proxy to
 `127.0.0.1:<port>` (the ports the compose file publishes on the host).
@@ -406,7 +406,7 @@ the host `nginx.conf` only needs the standard globals (`worker_processes`,
 sudo apt install -y nginx certbot apache2-utils    # apache2-utils = htpasswd
 sudo install -d -m755 /var/www/certbot            # ACME HTTP-01 root
 # copy the vhost(s) you need
-sudo cp <stack>/nginx/conf.d/*.conf /etc/nginx/conf.d/
+sudo cp <stack>/*.conf /etc/nginx/conf.d/
 sudo nginx -t && sudo systemctl reload nginx
 ```
 
@@ -416,7 +416,7 @@ ports 80 and 443 are open.
 
 ### monitoring host — the basic-auth file
 
-`monitoring/nginx/conf.d/metrics.conf` basic-auths the Prometheus
+`monitoring/metrics.conf` basic-auths the Prometheus
 remote-write endpoint. Create the file once:
 
 ```bash
@@ -515,7 +515,7 @@ mode.
 
 | Symptom | Cause |
 | --- | --- |
-| Bulwark login loops back to the login page | the browser was blocked by the CORS-less `/.well-known/oauth-authorization-server` answer of Authentik — the `^~ /.well-known/` block in `idp/nginx/conf.d/idp.conf` fixes it |
+| Bulwark login loops back to the login page | the browser was blocked by the CORS-less `/.well-known/oauth-authorization-server` answer of Authentik — the `^~ /.well-known/` block in `idp/idp.conf` fixes it |
 | `InvalidIssuer` / audience errors in the Stalwart log | `issuerUrl` must equal the `iss` claim of the token (`.../application/o/bulwark/`) and `requireAudience` must equal the client id `bulwark` |
 | Mail to a new user is rejected | the mailbox does not exist yet — run `mail/scripts/sync-users.sh` |
 | `502 Bad Gateway` on a domain | the container is not running or not published on `127.0.0.1` — check `docker compose ps` and the `proxy_pass` target in the vhost |
