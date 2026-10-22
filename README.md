@@ -33,29 +33,28 @@ idp/          Authentik + PostgreSQL                   (VPS A)
 mail/         Stalwart + Bulwark                       (VPS B)
 vault/        Vaultwarden                               (VPS C)
 monitoring/   Prometheus + Alertmanager + Grafana       (VPS D)
-nginx/        host nginx: nginx.conf, install.sh, issue-cert.sh
 ```
 
 Each stack directory is self-contained: its own `compose.yaml`, `.env`,
-`nginx/conf.d/` (the vhosts of that host) and `scripts/`. `nginx/nginx.conf`
-is shared so the proxy defaults stay identical on all hosts.
+`nginx/conf.d/` (the vhosts of this host — drop into `/etc/nginx/conf.d/`
+on the VPS that runs the stack) and `scripts/`. There is no shared
+`nginx.conf` in the repo; the vhosts are self-contained (they set the
+`X-Forwarded-*` headers inline), so the host `nginx.conf` only needs the
+standard globals.
 
 ```
 <stack>/
   compose.yaml          # top-level `name:` namespaces the volumes
   .env.example          # template, all secrets empty
-  nginx/conf.d/*.conf   # vhosts of this host (symlinked into /etc/nginx/conf.d)
+  nginx/conf.d/*.conf   # vhosts of this host (drop into /etc/nginx/conf.d)
   scripts/00-generate-env.sh
-  scripts/10-tls.sh
-  scripts/20-install-nginx.sh
 ```
 
 ## Requirements
 
 * One VPS per stack, Ubuntu 24.04 or Debian 13, Docker Engine + Compose v2
-* `certbot`, `openssl`, `curl`, `jq` on the host (nginx is installed by
-  `scripts/20-install-nginx.sh`; HTTP/2 needs nginx ≥ 1.25.1, older versions
-  fall back to HTTP/1.1)
+* `certbot`, `openssl`, `curl`, `jq`, `nginx` on the host (nginx ≥ 1.25.1
+  for HTTP/2, older versions fall back to HTTP/1.1)
 * A DNS zone for `june8th.eu.org`
 * Ports open: 80, 443 everywhere; 25, 465, 587, 993, 995 on the mail host.
   The container ports are bound to `127.0.0.1` and are not reachable from
@@ -71,21 +70,20 @@ cd /opt/identity-email-provider/<stack>
 ## Deployment order
 
 The IdP comes first — Bulwark and Vaultwarden need their OIDC applications to
-exist before they can start.
+exist before they can start. nginx is set up by hand (see [The host nginx](#the-host-nginx)),
+so each step is just `00-generate-env.sh` → `docker compose up -d` → first-boot
+script.
 
 ### 1. VPS A — identity provider
 
 ```bash
 cd /opt/identity-email-provider/idp
 scripts/00-generate-env.sh          # prints the Authentik admin password ONCE
-sudo scripts/20-install-nginx.sh    # installs nginx, links the vhosts of this host
-scripts/10-tls.sh                   # issues the certificate (webroot mode, no downtime)
 docker compose up -d
 ```
 
-The certificate is issued as `--cert-name june8th.eu.org` on **every** host, so
-the path is always `/etc/letsencrypt/live/june8th.eu.org/` — that is what nginx
-and Stalwart hardcode.
+The certificate path is always `/etc/letsencrypt/live/june8th.eu.org/` (every
+host issues with `--cert-name june8th.eu.org` — see [TLS](#tls)).
 
 Then log in at `https://idp.june8th.eu.org` with `akadmin` and the generated
 password and create the users and applications (see below).
@@ -101,8 +99,6 @@ Paste the printed `BULWARK_OAUTH_SECRET` into the `bulwark` OAuth2/OIDC
 provider in Authentik, then:
 
 ```bash
-sudo scripts/20-install-nginx.sh    # mail. + mx.
-scripts/10-tls.sh                   # mail. + mx.
 docker compose up -d
 scripts/01-bootstrap-stalwart.sh    # domain, TLS cert, OIDC directory, settings
 scripts/sync-users.sh               # create the mailboxes of the Authentik users
@@ -121,8 +117,6 @@ scripts/00-generate-env.sh          # prints the Vaultwarden admin token ONCE
 Paste the printed secret into the `vaultwarden` provider in Authentik, then:
 
 ```bash
-sudo scripts/20-install-nginx.sh
-scripts/10-tls.sh                   # vault.
 docker compose up -d
 ```
 
@@ -132,8 +126,6 @@ docker compose up -d
 cd /opt/identity-email-provider/monitoring
 scripts/00-generate-env.sh          # prints the Grafana and metrics passwords ONCE
 scripts/10-render-alertmanager.sh   # renders the receivers from .env
-sudo scripts/20-install-nginx.sh
-scripts/10-tls.sh                   # grafana. + metrics.
 docker compose up -d
 ```
 
@@ -260,39 +252,79 @@ UI itself is not exposed — Grafana is the front door.
 host overview, container overview and Prometheus self-monitoring. The datasource
 is provisioned as `prometheus` (uid) pointing at `http://prometheus:9090`.
 
-## TLS
-
-nginx runs on the host and terminates TLS; the containers speak plain HTTP on
-`127.0.0.1`. `scripts/10-tls.sh` issues the certificate with certbot in
-**webroot** mode — the host nginx serves `/.well-known/acme-challenge/` from
-`/var/www/certbot`, so there is no downtime and the renewal only reloads
-nginx:
-
-```bash
-cd /opt/identity-email-provider/<stack>
-scripts/10-tls.sh                                  # default domains of the stack
-scripts/10-tls.sh mail.june8th.eu.org mx.june8th.eu.org   # explicit domains
-certbot renew --dry-run
-```
-
-Every host uses `--cert-name june8th.eu.org`, so the renewal hook and the
-certificate path stay the same everywhere. The renewal reloads nginx and, on
-the mail host, restarts Stalwart (it serves 465/587/993/995 with that
-certificate).
-
 ## The host nginx
 
-`sudo scripts/20-install-nginx.sh` (per stack) installs nginx if needed and
+Each stack ships its vhost as a single file in `<stack>/nginx/conf.d/`. Drop
+the file(s) of the stack you are deploying into `/etc/nginx/conf.d/` on the
+VPS that runs that stack. They listen on 80 + 443 and proxy to
+`127.0.0.1:<port>` (the ports the compose file publishes on the host).
 
-* copies `nginx/nginx.conf` to `/etc/nginx/nginx.conf`,
-* symlinks the vhosts of this stack into `/etc/nginx/conf.d/` (the vhosts of
-  other stacks are removed — they point at containers that do not run here),
-* installs the basic-auth file of the monitoring stack,
-* creates `/var/www/certbot` and a placeholder certificate for the catch-all
-  server, then runs `nginx -t` and reloads.
+The vhosts are self-contained: they set `X-Forwarded-*` headers inline, so
+the host `nginx.conf` only needs the standard globals (`worker_processes`,
+`events { worker_connections }`, `http { include mime.types; include
+/etc/nginx/conf.d/*.conf; }`). HTTP/2 is automatic on nginx ≥ 1.25.1.
 
-The repository stays the source of truth: `git pull` is enough to update a
-vhost, `systemctl reload nginx` applies it.
+### One-time setup per host
+
+```bash
+sudo apt install -y nginx certbot apache2-utils    # apache2-utils = htpasswd
+sudo install -d -m755 /var/www/certbot            # ACME HTTP-01 root
+# copy the vhost(s) you need
+sudo cp <stack>/nginx/conf.d/*.conf /etc/nginx/conf.d/
+sudo nginx -t && sudo systemctl reload nginx
+```
+
+Update a vhost later: `sudo cp ...` (or `git pull` + re-copy) and
+`sudo systemctl reload nginx`. The container backends are not exposed — only
+ports 80 and 443 are open.
+
+### monitoring host — the basic-auth file
+
+`monitoring/nginx/conf.d/metrics.conf` basic-auths the Prometheus
+remote-write endpoint. Create the file once:
+
+```bash
+sudo install -d -m755 /etc/nginx/auth
+METRICS_PASS=$(openssl rand -hex 24)
+sudo htpasswd -cB /etc/nginx/auth/metrics.htpasswd metrics   # type $METRICS_PASS
+echo "$METRICS_PASS"   # save as METRICS_BASIC_AUTH_PASSWORD in the projects' .env
+```
+
+## TLS
+
+Every host runs its own nginx and terminates TLS there. certbot issues the
+certificate in **webroot** mode — the host nginx serves
+`/.well-known/acme-challenge/` from `/var/www/certbot`, so there is no
+downtime and the renewal only has to reload nginx.
+
+```bash
+sudo certbot certonly --webroot -w /var/www/certbot \
+    --non-interactive --agree-tos --email admin@june8th.eu.org \
+    --cert-name june8th.eu.org \
+    -d idp.june8th.eu.org
+# ...and so on for every domain of the host
+```
+
+Every host uses `--cert-name june8th.eu.org`, so the certificate path is
+always `/etc/letsencrypt/live/june8th.eu.org/` — that is what the vhosts
+hardcode. Wire the renewal hook so nginx picks up new certs without manual
+intervention:
+
+```bash
+sudo tee /etc/letsencrypt/renewal-hooks/deploy/reload-nginx.sh >/dev/null <<'EOF'
+#!/bin/sh
+systemctl reload nginx
+# on the mail host, Stalwart serves 465/587/993/995 with the same cert:
+# cd /opt/identity-email-provider/mail && docker compose restart stalwart
+EOF
+sudo chmod +x /etc/letsencrypt/renewal-hooks/deploy/reload-nginx.sh
+```
+
+Test it without touching the live cert:
+
+```bash
+sudo certbot renew --dry-run
+```
 
 ## DNS
 
@@ -339,7 +371,8 @@ safe as the user's master password.
 | `InvalidIssuer` / audience errors in the Stalwart log | `issuerUrl` must equal the `iss` claim of the token (`.../application/o/bulwark/`) and `requireAudience` must equal the client id `bulwark` |
 | Mail to a new user is rejected | the mailbox does not exist yet — run `mail/scripts/sync-users.sh` |
 | `502 Bad Gateway` on a domain | the container is not running or not published on `127.0.0.1` — check `docker compose ps` and the `proxy_pass` target in the vhost |
-| nginx does not start | the vhost or the certificate is broken — `sudo nginx -t` shows the reason; the certificate is issued by `scripts/10-tls.sh` |
-| nginx does not pick up a vhost change | `sudo scripts/20-install-nginx.sh` links the vhosts, `systemctl reload nginx` applies them |
-| The remote-write endpoint answers 401 | the basic-auth file is missing or stale — `sudo scripts/20-install-nginx.sh` installs `monitoring/nginx/auth/metrics.htpasswd` |
+| nginx does not start | the vhost or the certificate is broken — `sudo nginx -t` shows the reason; the certificate is issued with `certbot --cert-name june8th.eu.org` (see [TLS](#tls)) |
+| nginx does not pick up a vhost change | re-copy the file from the repo and `sudo systemctl reload nginx` |
+| remote-write answers 401 | the basic-auth file is missing or stale — see [monitoring host — the basic-auth file](#monitoring-host--the-basic-auth-file) |
+| The remote-write endpoint answers 401 | the basic-auth file is missing or stale — recreate it with `htpasswd -cB` (see [monitoring host — the basic-auth file](#monitoring-host--the-basic-auth-file)) |
 | Grafana shows no data | check `monitoring/prometheus/prometheus.yml` and the `Targets` page of Prometheus |
